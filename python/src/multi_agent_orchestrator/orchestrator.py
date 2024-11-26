@@ -10,8 +10,8 @@ from multi_agent_orchestrator.classifiers import (Classifier,
 from multi_agent_orchestrator.agents import (Agent,
                         AgentResponse,
                         AgentProcessingResult,
-                        BedrockLLMAgent,
-                        BedrockLLMAgentOptions)
+                        TaskExpertAgent,
+                        TaskExpertOptions)
 from multi_agent_orchestrator.storage import ChatStorage, InMemoryChatStorage
 
 @dataclass
@@ -44,8 +44,8 @@ class MultiAgentOrchestrator:
         self.storage = storage or InMemoryChatStorage()
         self.classifier: Classifier = classifier or BedrockClassifier(options=BedrockClassifierOptions())
         self.execution_times: Dict[str, float] = {}
-        self.default_agent: Agent = BedrockLLMAgent(
-            options=BedrockLLMAgentOptions(
+        self.default_agent: Agent = TaskExpertAgent(
+            options=TaskExpertOptions(
                 name="DEFAULT",
                 streaming=True,
                 description="A knowledgeable generalist capable of addressing a wide range of topics.",
