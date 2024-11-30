@@ -8,13 +8,11 @@ __pycache__/
 
 
 # Organization files 
-todo.txt   
 venv/
-MAX-plus-specification.md
-high-level-outline.md
-final-implementation-plan.md
-Project-Outline-MAX-&-Integration-order.txt
+*.md
+*.txt
 *.mermaid
+docs/
 
 # Distribution / packaging
 .Python
