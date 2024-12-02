@@ -1,0 +1,32 @@
+------------ add this to main script ------------
+
+Here’s how the initialization will look without TTL:
+
+python
+Copy code
+class MongoDBChatStorage(ChatStorage):
+    def __init__(self, mongo_uri: str, db_name: str, collection_name: str):
+        self.client = AsyncIOMotorClient(mongo_uri)
+        self.collection = self.client[db_name][collection_name]
+
+        # No TTL index applied. All conversations persist indefinitely.
+        Logger.info(f"MongoDB storage initialized for collection: {collection_name}")
+
+
+
+
+--------- Pass to Orchestrator: ------------
+
+python
+Copy code
+orchestrator = MultiAgentOrchestrator(storage=storage)
+
+------------ Implement goals ?! ------------
+
+
+
+----------- Knowledge Graph Memory Server ------------
+
+Fetcher as backup 
+
+---------------	general crypto analyzer -----------------

@@ -1,15 +1,15 @@
 import pytest
 from typing import List, Dict
 from unittest.mock import patch, MagicMock
-from multi_agent_orchestrator.types import ConversationMessage, TimestampedMessage
-from multi_agent_orchestrator.storage import InMemoryChatStorage
-from multi_agent_orchestrator.utils import Logger
+from MAX.types import ConversationMessage, TimestampedMessage
+from MAX.storage import InMemoryChatStorage
+from MAX.utils import Logger
 
 tmp_logger = Logger()
 
 @pytest.fixture
 def mock_logger():
-    with patch('multi_agent_orchestrator.utils.logger') as mock:
+    with patch('MAX.utils.logger') as mock:
         yield mock
 
 

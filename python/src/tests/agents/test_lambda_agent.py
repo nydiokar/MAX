@@ -3,9 +3,9 @@ import pytest
 import json
 from unittest.mock import Mock, patch
 from botocore.response import StreamingBody
-from multi_agent_orchestrator.agents import AgentOptions
-from multi_agent_orchestrator.types import ConversationMessage, ParticipantRole
-from multi_agent_orchestrator.agents import LambdaAgent, LambdaAgentOptions
+from MAX.agents import AgentOptions
+from MAX.types import ConversationMessage, ParticipantRole
+from MAX.agents import LambdaAgent, LambdaAgentOptions
 
 def custom_payload_decoder(payload):
     return ConversationMessage(

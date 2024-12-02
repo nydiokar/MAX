@@ -2,8 +2,8 @@ import pytest
 from unittest.mock import Mock, patch
 from botocore.exceptions import BotoCoreError, ClientError
 
-from multi_agent_orchestrator.types import ConversationMessage, ParticipantRole
-from multi_agent_orchestrator.agents import LexBotAgent, LexBotAgentOptions
+from MAX.types import ConversationMessage, ParticipantRole
+from MAX.agents import LexBotAgent, LexBotAgentOptions
 
 @pytest.fixture
 def lex_bot_options():

@@ -1,8 +1,8 @@
 import pytest
 import asyncio
 from typing import List
-from multi_agent_orchestrator.types import ConversationMessage
-from multi_agent_orchestrator.storage import ChatStorage
+from MAX.types import ConversationMessage
+from MAX.storage import ChatStorage
 
 class MockChatStorage(ChatStorage):
     async def save_chat_message(self, user_id: str, session_id: str, agent_id: str, new_message: ConversationMessage, max_history_size: int = None) -> bool:

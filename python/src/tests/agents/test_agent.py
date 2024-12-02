@@ -1,8 +1,8 @@
 import pytest
 from typing import Dict, List
 from unittest.mock import Mock
-from multi_agent_orchestrator.types import ConversationMessage
-from multi_agent_orchestrator.agents import AgentProcessingResult, AgentResponse, AgentCallbacks, AgentOptions, Agent
+from MAX.types import ConversationMessage
+from MAX.agents import AgentProcessingResult, AgentResponse, AgentCallbacks, AgentOptions, Agent
 
 class TestAgent:
     @pytest.fixture
