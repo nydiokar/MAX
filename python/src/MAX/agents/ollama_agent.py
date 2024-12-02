@@ -1,7 +1,7 @@
-from typing import List, Dict, Optional, AsyncIterable, Any
+from typing import List, Dict, Optional, AsyncIterable, Any, Tuple
 from MAX.agents import Agent, AgentOptions
 from MAX.types import ConversationMessage, ParticipantRole
-from MAX.utils import Logger  # Using the existing Logger
+from MAX.utils import Logger
 import ollama
 from dataclasses import dataclass
 
@@ -12,6 +12,22 @@ class OllamaAgentOptions(AgentOptions):
     temperature: float = 0.7
     top_p: float = 0.9
 
+    # Adding classification-specific templates
+    classification_prompt: str = """
+    Classify the intent of the following input into one of these categories:
+    - question (asking for information)
+    - command (requesting an action)
+    - statement (providing information)
+    - clarification (asking for explanation)
+    - task (requesting to perform a task)
+    
+    Provide your answer in the format:
+    INTENT: <category>
+    CONFIDENCE: <0.0-1.0>
+    
+    Input: {input_text}
+    """
+
 class OllamaAgent(Agent):
     def __init__(self, options: OllamaAgentOptions):
         super().__init__(options)
@@ -19,57 +35,59 @@ class OllamaAgent(Agent):
         self.streaming = options.streaming
         self.temperature = options.temperature
         self.top_p = options.top_p
-        self.logger = Logger()  # Using the existing Logger
-        
-        # Log initialization
-        self.logger.info(f"Initialized OllamaAgent with model: {self.model_id}")
-        self.logger.info(f"Streaming: {self.streaming}")
-        self.logger.info(f"Temperature: {self.temperature}")
+        self.classification_prompt = options.classification_prompt
+        self.logger = Logger()
 
-    async def handle_streaming_response(self, messages: List[Dict[str, str]]) -> ConversationMessage:
-        self.logger.debug("Starting streaming response")
-        text = ''
+    async def classify_intent(self, input_text: str) -> Tuple[str, float]:
+        """Classify the intent of the input text"""
+        self.logger.info(f"Classifying intent for: {input_text}")
+        
         try:
+            # Format the classification prompt
+            prompt = self.classification_prompt.format(input_text=input_text)
+            
+            # Use lower temperature for classification
             response = ollama.chat(
                 model=self.model_id,
-                messages=messages,
-                stream=True,
+                messages=[{"role": "user", "content": prompt}],
                 options={
-                    "temperature": self.temperature,
-                    "top_p": self.top_p
+                    "temperature": 0.1,  # Lower temperature for more consistent classification
+                    "top_p": 0.9
                 }
             )
             
-            for part in response:
-                text += part['message']['content']
-                self.callbacks.on_llm_new_token(part['message']['content'])
-                self.logger.debug(f"Received token: {part['message']['content'][:20]}...")
+            response_text = response['message']['content']
+            self.logger.debug(f"Raw classification response: {response_text}")
+            
+            # Parse the response
+            intent = "unknown"
+            confidence = 0.0
+            
+            for line in response_text.split('\n'):
+                if line.startswith('INTENT:'):
+                    intent = line.replace('INTENT:', '').strip().lower()
+                elif line.startswith('CONFIDENCE:'):
+                    try:
+                        confidence = float(line.replace('CONFIDENCE:', '').strip())
+                    except ValueError:
+                        confidence = 0.0
+            
+            self.logger.info(f"Classified intent: {intent} (confidence: {confidence})")
+            return intent, confidence
+            
+        except Exception as e:
+            self.logger.error(f"Error in intent classification: {str(e)}")
+            raise
 
-            self.logger.info("Streaming response completed")
-            return ConversationMessage(
-                role=ParticipantRole.ASSISTANT.value,
-                content=[{"text": text}]
-            )
-
-        except Exception as error:
-            self.logger.error(f"Error in streaming response: {str(error)}")
-            raise error
-
-    async def process_request(
-        self,
-        input_text: str,
-        user_id: str,
-        session_id: str,
-        chat_history: List[ConversationMessage],
-        additional_params: Optional[Dict[str, str]] = None
-    ) -> ConversationMessage | AsyncIterable[Any]:
-        self.logger.info(f"Processing request for user {user_id}, session {session_id}")
-        self.logger.debug(f"Input text: {input_text}")
+    async def process_request(self, input_text: str, user_id: str, session_id: str,
+                            chat_history: List[ConversationMessage],
+                            additional_params: Optional[Dict[str, str]] = None) -> ConversationMessage | AsyncIterable[Any]:
+        # First classify the intent
+        intent, confidence = await self.classify_intent(input_text)
         
-        # Log chat history if present
-        if chat_history:
-            self.logger.print_chat_history(chat_history, self.model_id)
-
+        self.logger.info(f"Processing request with classified intent: {intent} (confidence: {confidence})")
+        
+        # Continue with regular processing...
         messages = [
             {"role": msg.role, "content": msg.content[0]['text']}
             for msg in chat_history
@@ -78,10 +96,8 @@ class OllamaAgent(Agent):
 
         try:
             if self.streaming:
-                self.logger.info("Using streaming mode")
                 return await self.handle_streaming_response(messages)
             else:
-                self.logger.info("Using non-streaming mode")
                 response = ollama.chat(
                     model=self.model_id,
                     messages=messages,
@@ -90,14 +106,16 @@ class OllamaAgent(Agent):
                         "top_p": self.top_p
                     }
                 )
-                self.logger.info("Request processed successfully")
                 return ConversationMessage(
                     role=ParticipantRole.ASSISTANT.value,
-                    content=[{"text": response['message']['content']}]
+                    content=[{
+                        "text": response['message']['content'],
+                        "metadata": {
+                            "intent": intent,
+                            "confidence": confidence
+                        }
+                    }]
                 )
         except Exception as e:
-            self.logger.error(f"Error processing request: {str(e)}")
+            self.logger.error(f"Error in process_request: {str(e)}")
             raise
-
-    def is_streaming_enabled(self) -> bool:
-        return self.streaming
