@@ -6,7 +6,9 @@ from MAX.utils.logger import Logger
 from MAX.types import (
     ConversationMessage, 
     ParticipantRole, 
-    OrchestratorConfig
+    OrchestratorConfig,
+    AgentMessage,
+    MessageType
 )
 from MAX.classifiers import (
     Classifier,
@@ -32,7 +34,8 @@ class MultiAgentOrchestrator:
         options: Optional[OrchestratorConfig] = None,
         storage: Optional[ChatStorage] = None,
         classifier: Optional[Classifier] = None,
-        logger: Optional[Logger] = None
+        logger: Optional[Logger] = None,
+        use_local_classifier: bool = False
     ):
         # Initialize database configuration
         self.db_config = DatabaseConfig()
@@ -41,6 +44,21 @@ class MultiAgentOrchestrator:
         self.state_manager = StateManager(self.db_config)
 
         DEFAULT_CONFIG = OrchestratorConfig()
+
+        if use_local_classifier:
+            from MAX.agents import OllamaAgent, OllamaAgentOptions
+            self.classifier = OllamaAgent(
+                options=OllamaAgentOptions(
+                    name="intent_classifier",
+                    model_id="llama3.1:8b-instruct-q8_0",
+                    description="Local intent classifier"
+                )
+            )
+        else:
+            self.classifier = classifier or AnthropicClassifier(
+                options=AnthropicClassifierOptions()
+            )
+
 
         if options is None:
             options = {}
@@ -66,6 +84,11 @@ class MultiAgentOrchestrator:
 
         # Initialize system state at startup
         asyncio.create_task(self._initialize_system())
+
+        # Add message queue
+        self.message_queue: asyncio.Queue[AgentMessage] = asyncio.Queue()
+        self.pending_responses: Dict[str, asyncio.Future] = {}
+        self.message_processor_task = asyncio.create_task(self._process_message_queue())
 
     async def _initialize_system(self):
         """Initialize system state and restore previous state if available"""
@@ -331,3 +354,42 @@ class MultiAgentOrchestrator:
                 new_message=message,
                 max_history_size=self.config.MAX_MESSAGE_PAIRS_PER_AGENT
             )
+
+    # Add new message queue processing methods
+    async def _process_message_queue(self):
+        while True:
+            try:
+                message = await self.message_queue.get()
+                if message.target_agent not in self.agents:
+                    self.logger.error(f"Unknown target agent: {message.target_agent}")
+                    continue
+
+                target_agent = self.agents[message.target_agent]
+                response = await self._dispatch_to_agent(target_agent, message)
+                
+                # Handle response
+                if message.correlation_id in self.pending_responses:
+                    future = self.pending_responses[message.correlation_id]
+                    if not future.done():
+                        future.set_result(response)
+                
+                self.message_queue.task_done()
+                
+            except Exception as e:
+                self.logger.error(f"Error processing message: {str(e)}")
+                continue
+
+    async def shutdown(self):
+        self.message_processor_task.cancel()
+        try:
+            await self.message_processor_task
+        except asyncio.CancelledError:
+            pass
+
+        # Additional cleanup
+        self.pending_responses.clear()
+        while not self.message_queue.empty():
+            try:
+                self.message_queue.get_nowait()
+            except asyncio.QueueEmpty:
+                break

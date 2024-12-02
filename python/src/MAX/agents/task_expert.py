@@ -14,6 +14,8 @@ from MAX.types import (
 )
 from MAX.utils import Logger, conversation_to_dict
 from MAX.retrievers import Retriever
+from MAX.agents import OllamaAgent
+from MAX.retrievers.kb_retriever import KnowledgeBasesRetrieverOptions, KnowledgeBasesRetriever
 
 # Data Models
 class TaskStatus(Enum):
@@ -110,6 +112,16 @@ class TaskExpertAgent:
         
         Maintain clear documentation and provide detailed responses."""
 
+        # In your initialization code
+        retriever_options = KnowledgeBasesRetrieverOptions(
+            storage_client=self.storage,  # ChromaDB, MongoDB, or other storage
+            collection_name="knowledge_base",
+            max_results=5,
+            similarity_threshold=0.7
+        )
+
+        self.retriever = KnowledgeBasesRetriever(retriever_options)
+
     async def process_request(
         self,
         input_text: str,
@@ -120,14 +132,12 @@ class TaskExpertAgent:
     ) -> Union[ConversationMessage, AsyncIterable[Any]]:
         """Main request processing following MAO framework with REACT methodology"""
         try:
+            # Retrieve additional context from the knowledge base
+            context = await self.retriever.retrieve_and_combine_results(input_text)
+
             # REACT: Reasoning Phase
-            reasoning = await self._reason_about_request(input_text, chat_history)
+            reasoning = await self._reason_about_request(input_text, chat_history, context)
             self.current_reasoning = reasoning
-            
-            # Get additional context if retriever is configured
-            context = None
-            if self.retriever:
-                context = await self.retriever.retrieve_and_combine_results(input_text)
             
             # REACT: Action Phase
             action_plan = await self._create_action_plan(reasoning, context)
@@ -152,6 +162,17 @@ class TaskExpertAgent:
                 next_steps=next_steps
             )
             
+            # Save the interaction
+            await self.storage.save_chat_message(
+                user_id=user_id,
+                session_id=session_id,
+                agent_id=self.agent_id,
+                new_message=ConversationMessage(
+                    role=ParticipantRole.USER.value,
+                    content=input_text
+                )
+            )
+            
             return self._format_response(next_steps)
             
         except Exception as e:
@@ -163,9 +184,21 @@ class TaskExpertAgent:
         input_text: str,
         chat_history: List[ConversationMessage]
     ) -> Dict[str, Any]:
-        """Enhanced reasoning with structured output"""
+        """Enhanced reasoning with structured output and LLM classification"""
+        
+        # Use OllamaAgent's intent classification if available
+        intent = self._classify_request(input_text)
+        confidence = 1.0
+        
+        if isinstance(self.agent, OllamaAgent):
+            intent, confidence = await self.agent.classify_intent(
+                input_text,
+                possible_intents=["create_task", "update_task", "delete_task", "report_status", "query_tasks"]
+            )
+        
         return {
-            "type": self._classify_request(input_text),
+            "type": intent,
+            "confidence": confidence,
             "context": self._extract_context(chat_history),
             "requirements": self._extract_requirements(input_text),
             "constraints": self._identify_constraints(input_text),
