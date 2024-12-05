@@ -1,108 +1,76 @@
-# MAO + REACT
+import asyncio
 from typing import List, Dict, Any, Optional, Union, AsyncIterable
 from datetime import datetime, timedelta
 from enum import Enum
-import json
-import asyncio
 from uuid import uuid4
-from pydantic import BaseModel, field_validator
-
-from MAX.types import (
-    ConversationMessage,
-    ParticipantRole,
-    TemplateVariables
-)
-from MAX.utils import Logger, conversation_to_dict
+from ..utils.interfaces import TaskStorage, NotificationService, TaskStatus, TaskPriority, TaskModel
+from ..types import ConversationMessage, ParticipantRole
+from ..utils import Logger
 from MAX.retrievers import Retriever
-from MAX.agents import OllamaAgent
 from MAX.retrievers.kb_retriever import KnowledgeBasesRetrieverOptions, KnowledgeBasesRetriever
+from MAX.adapters.llm import create_llm_provider
+from .agent import Agent
+from ..utils.options import TaskExpertOptions
 
-# Data Models
-class TaskStatus(Enum):
-    PENDING = "pending"
-    IN_PROGRESS = "in_progress"
-    COMPLETED = "completed"
-    OVERDUE = "overdue"
-    BLOCKED = "blocked"
+class TaskExpertError(Exception):
+    """Custom exception class for TaskExpert-specific errors"""
+    pass
 
-class TaskPriority(Enum):
-    LOW = "low"
-    MEDIUM = "medium"
-    HIGH = "high"
-    URGENT = "urgent"
-
-class TaskModel(BaseModel):
-    id: str
-    title: str
-    description: str
-    assigned_agent: str
-    status: TaskStatus
-    priority: TaskPriority
-    created_at: datetime
-    due_date: Optional[datetime]
-    dependencies: List[str]
-    progress: float
-    last_updated: datetime
-    metadata: Dict[str, Any]
-
-    @field_validator('progress')
-    @classmethod
-    def validate_progress(cls, v):
-        if not 0 <= v <= 100:
-            raise ValueError('Progress must be between 0 and 100')
-        return v
-
-# Storage Interface
-class TaskStorage:
-    """Abstract base class for task storage"""
-    async def save_task(self, task: TaskModel) -> None:
-        raise NotImplementedError
+class TaskExpertAgent(Agent):
+    """
+    Task Expert Agent responsible for managing and coordinating tasks.
+    
+    This agent implements the REACT framework (Reason, Act, Observe, Think)
+    for processing tasks and maintains state through a storage system.
+    
+    Attributes:
+        storage: TaskStorage instance for persistent storage
+        notifications: NotificationService for alert handling
+        llm: Language Model provider for task processing
+        retriever: Optional knowledge base retriever
         
-    async def get_task(self, task_id: str) -> Optional[TaskModel]:
-        raise NotImplementedError
-        
-    async def get_tasks(self, filters: Dict[str, Any]) -> List[TaskModel]:
-        raise NotImplementedError
-        
-    async def delete_task(self, task_id: str) -> None:
-        raise NotImplementedError
-
-# Notification Interface
-class NotificationService:
-    """Abstract base class for notification service"""
-    async def send(self, agent_id: str, notification: Dict[str, Any]) -> None:
-        raise NotImplementedError
-
-
-class TaskExpertAgent:
-    def __init__(self, options):
-        # Import Agent locally to avoid circular import
-        from .options import TaskExpertOptions
-        from .agent import Agent
-
-        # Convert TaskExpertOptions to AgentOptions for base class
-        agent_options = options.to_agent_options()
-        self.agent = Agent(agent_options)
+    The agent processes requests through the following steps:
+    1. Retrieves relevant context
+    2. Reasons about the request
+    3. Creates and executes action plans
+    4. Observes results and plans next steps
+    """
+    def __init__(self, options: TaskExpertOptions):
+        super().__init__(options)
         
         # Initialize task-specific attributes
         self.storage = options.storage_client
         self.notifications = options.notification_service
-        self.agent_registry = options.agent_registry
         self.default_ttl = options.default_task_ttl
         self.retriever = options.retriever
+        
+        # Set up LLM
+        self.llm = create_llm_provider(
+            "ollama",
+            model_id=options.model_id,
+            temperature=options.temperature,
+            max_tokens=options.max_tokens,
+            top_p=options.top_p
+        )
+    
+        if options.fallback_model_id:
+            self.fallback_llm = create_llm_provider(
+                "ollama",
+                model_id=options.fallback_model_id
+            )
         
         # REACT state management
         self.current_reasoning: Dict[str, Any] = {}
         self.last_observation: Dict[str, Any] = {}
         self.action_history: List[Dict[str, Any]] = []
 
-        # Configure system prompt for task management
-        self.system_prompt = """You are a Task Expert Agent responsible for managing and coordinating tasks across multiple AI agents.
+        # Configure system prompt
+        self.system_prompt = """You are a Task Expert Agent responsible for managing and coordinating tasks.
         Your primary responsibilities include:
         1. Creating and managing tasks based on user requests
         2. Monitoring task progress and dependencies
         3. Generating status reports
-        4. Coordinating between agents
+        4. Coordinating task execution
         
         Follow the REACT framework for all operations:
         1. Reason: Analyze the request and context
@@ -112,15 +80,15 @@ class TaskExpertAgent:
         
         Maintain clear documentation and provide detailed responses."""
 
-        # In your initialization code
-        retriever_options = KnowledgeBasesRetrieverOptions(
-            storage_client=self.storage,  # ChromaDB, MongoDB, or other storage
-            collection_name="knowledge_base",
-            max_results=5,
-            similarity_threshold=0.7
-        )
-
-        self.retriever = KnowledgeBasesRetriever(retriever_options)
+        # Initialize retriever if needed
+        if self.retriever is None and self.storage is not None:
+            retriever_options = KnowledgeBasesRetrieverOptions(
+                storage_client=self.storage,
+                collection_name="knowledge_base",
+                max_results=5,
+                similarity_threshold=0.7
+            )
+            self.retriever = KnowledgeBasesRetriever(retriever_options)
 
     async def process_request(
         self,
@@ -130,28 +98,28 @@ class TaskExpertAgent:
         chat_history: List[ConversationMessage],
         additional_params: Optional[Dict[str, str]] = None
     ) -> Union[ConversationMessage, AsyncIterable[Any]]:
-        """Main request processing following MAO framework with REACT methodology"""
+        Logger.info(f"Processing request for user {user_id} in session {session_id}")
         try:
-            # Retrieve additional context from the knowledge base
-            context = await self.retriever.retrieve_and_combine_results(input_text)
+            # Get context from knowledge base
+            context = await self.retriever.retrieve_and_combine_results(input_text) if self.retriever else ""
+            Logger.debug(f"Retrieved context: {context[:100]}...")
 
-            # REACT: Reasoning Phase
+            # REACT Framework Implementation
+            # 1. Reasoning Phase
             reasoning = await self._reason_about_request(input_text, chat_history, context)
-            self.current_reasoning = reasoning
-            
-            # REACT: Action Phase
-            action_plan = await self._create_action_plan(reasoning, context)
-            
-            # Execute actions
+            Logger.info(f"Reasoning complete with type: {reasoning.get('type', 'unknown')}")
+
+            # 2. Action Phase
+            action_plan = await self._create_action_plan(reasoning)
             result = await self._execute_actions(action_plan, user_id, session_id)
-            
-            # REACT: Observe Phase
+
+            # 3. Observe Phase
             observation = self._observe_results(result)
             self.last_observation = observation
-            
-            # REACT: Think Phase
+
+            # 4. Think Phase
             next_steps = self._plan_next_steps(observation)
-            
+
             # Store interaction history
             await self._store_interaction(
                 user_id=user_id,
@@ -161,102 +129,70 @@ class TaskExpertAgent:
                 observation=observation,
                 next_steps=next_steps
             )
-            
-            # Save the interaction
-            await self.storage.save_chat_message(
-                user_id=user_id,
-                session_id=session_id,
-                agent_id=self.agent_id,
-                new_message=ConversationMessage(
-                    role=ParticipantRole.USER.value,
-                    content=input_text
-                )
-            )
-            
+
             return self._format_response(next_steps)
-            
+
         except Exception as e:
             Logger.error(f"Error in task processing: {str(e)}")
             return self._handle_error(e)
 
-    async def _reason_about_request(
+    async def _get_model_response(
         self,
-        input_text: str,
-        chat_history: List[ConversationMessage]
+        messages: List[Dict[str, str]],
+        retry_count: int = 2
     ) -> Dict[str, Any]:
-        """Enhanced reasoning with structured output and LLM classification"""
-        
-        # Use OllamaAgent's intent classification if available
-        intent = self._classify_request(input_text)
-        confidence = 1.0
-        
-        if isinstance(self.agent, OllamaAgent):
-            intent, confidence = await self.agent.classify_intent(
-                input_text,
-                possible_intents=["create_task", "update_task", "delete_task", "report_status", "query_tasks"]
-            )
-        
-        return {
-            "type": intent,
-            "confidence": confidence,
-            "context": self._extract_context(chat_history),
-            "requirements": self._extract_requirements(input_text),
-            "constraints": self._identify_constraints(input_text),
-            "priorities": self._determine_priorities(input_text),
-            "timestamp": datetime.now().isoformat(),
-            "reasoning_steps": [
-                self._analyze_intent(input_text),
-                self._check_prerequisites(input_text),
-                self._evaluate_complexity(input_text)
-            ]
-        }
-
-    def _classify_request(self, input_text: str) -> str:
-        """Classify the type of task request"""
-        # Implement classification logic using regex or ML model
-        if "create" in input_text.lower() or "new task" in input_text.lower():
-            return "create_task"
-        elif "update" in input_text.lower() or "modify" in input_text.lower():
-            return "update_task"
-        elif "delete" in input_text.lower() or "remove" in input_text.lower():
-            return "delete_task"
-        elif "status" in input_text.lower() or "report" in input_text.lower():
-            return "report_status"
-        else:
-            return "query_tasks"
-
-    async def _execute_actions(
-        self,
-        action_plan: List[Dict[str, Any]],
-        user_id: str,
-        session_id: str
-    ) -> Dict[str, Any]:
-        """Execute planned actions with error handling and logging"""
-        results = []
-        for action in action_plan:
+        """Get response from the model with fallback and retry logic."""
+        last_exception = None
+        for attempt in range(retry_count):
             try:
-                if action["type"] == "create_task":
-                    task = await self.create_task(action["data"])
-                    results.append({"type": "task_created", "task_id": task.id})
-                elif action["type"] == "update_task":
-                    task = await self.update_task_status(
-                        action["data"]["task_id"],
-                        action["data"]["status"],
-                        action["data"]["progress"]
-                    )
-                    results.append({"type": "task_updated", "task_id": task.id})
-                elif action["type"] == "generate_report":
-                    report = await self.generate_status_report(action["data"].get("filters"))
-                    results.append({"type": "report_generated", "report": report})
-                
-                # Log successful action
-                Logger.info(f"Action executed successfully: {action['type']}")
-                
+                return await self.llm.generate(messages)
             except Exception as e:
-                Logger.error(f"Action execution failed: {str(e)}")
-                results.append({"type": "error", "action": action["type"], "error": str(e)})
+                last_exception = e
+                Logger.warning(f"Attempt {attempt + 1} failed: {str(e)}")
+                await asyncio.sleep(1)  # Wait for 1 second before retrying
+
+        # If retries are exhausted, attempt fallback model
+        if hasattr(self, 'fallback_llm'):
+            Logger.warning("Attempting fallback model")
+            try:
+                return await self.fallback_llm.generate(messages)
+            except Exception as fallback_exception:
+                Logger.error(f"Fallback model response error: {str(fallback_exception)}")
+                raise TaskExpertError("Fallback model failed") from fallback_exception
+
+        # If no fallback model or fallback failed
+        raise TaskExpertError("Model failed after retries") from last_exception
+
+    async def add_task(self, task_data: Dict[str, Any]) -> str:
+        """Add a new task."""
+        task_id = str(uuid4())
+        task = TaskModel(
+            id=task_id,
+            **task_data,
+            created_at=datetime.now(),
+            last_updated=datetime.now(),
+            status=TaskStatus.PENDING
+        )
+        await self.storage.save_task(task)
+        return task_id
+
+    async def update_task_status(
+        self,
+        task_id: str,
+        status: TaskStatus,
+        progress: float
+    ) -> TaskModel:
+        """Update task status and progress."""
+        task = await self.storage.get_task(task_id)
+        if not task:
+            raise ValueError(f"Task {task_id} not found")
+            
+        task.status = status
+        task.progress = progress
+        task.last_updated = datetime.now()
         
-        return {"results": results}
+        await self.storage.save_task(task)
+        return task
 
     async def _store_interaction(
         self,
@@ -267,8 +203,8 @@ class TaskExpertAgent:
         observation: Dict[str, Any],
         next_steps: Dict[str, Any]
     ) -> None:
-        """Store interaction history for analysis and debugging"""
-        interaction = {
+        """Store interaction history."""
+        await self.storage.save_interaction({
             "user_id": user_id,
             "session_id": session_id,
             "timestamp": datetime.now().isoformat(),
@@ -276,82 +212,4 @@ class TaskExpertAgent:
             "action": action,
             "observation": observation,
             "next_steps": next_steps
-        }
-        
-        # Store in your preferred storage solution
-        await self.storage.save_interaction(interaction)
-
-    def _format_response(self, next_steps: Dict[str, Any]) -> ConversationMessage:
-        """Format response following MAO's conversation structure with enhanced metadata"""
-        return ConversationMessage(
-            role=ParticipantRole.ASSISTANT.value,
-            content=[{
-                "text": next_steps["response_text"],
-                "metadata": {
-                    "reasoning": self.current_reasoning,
-                    "observation": self.last_observation,
-                    "next_steps": next_steps,
-                    "agent_info": {
-                        "name": self.agent.name,
-                        "version": "1.0",
-                        "capabilities": ["task_management", "coordination", "reporting"]
-                    }
-                }
-            }]
-        )
-
-    async def add_recurring_task(self, agent_id, start_time, interval_hours, end_time, task_data):
-        """Adds a recurring task to the database."""
-        task_id = str(uuid4())
-        await self.storage.save_task({
-            "id": task_id,
-            "agent_id": agent_id,
-            "next_run_time": start_time,
-            "repeat_interval": interval_hours,
-            "end_time": end_time,
-            "data": task_data,
-            "status": TaskStatus.PENDING.value  # Mark as pending
         })
-        Logger.info(f"Recurring task {task_id} added for agent {agent_id}.")
-        return task_id
-
-    async def check_and_execute_tasks(self):
-        """Periodically checks and executes due tasks."""
-        while True:
-            try:
-                # Fetch tasks that are due for execution
-                tasks_due = await self.storage.get_tasks({"next_run_time <= ": datetime.now()})
-                
-                for task in tasks_due:
-                    try:
-                        # Execute the task
-                        agent_id = task["agent_id"]
-                        task_data = task["data"]
-                        await self.execute_task(agent_id, task_data)
-                        
-                        # Update the next run time or mark as completed
-                        next_run = task["next_run_time"] + timedelta(hours=task["repeat_interval"])
-                        if next_run <= task["end_time"]:
-                            await self.storage.update_task(task["id"], {"next_run_time": next_run})
-                        else:
-                            await self.storage.update_task(task["id"], {"status": TaskStatus.COMPLETED.value})
-                            Logger.info(f"Task {task['id']} marked as completed.")
-                    
-                    except Exception as e:
-                        Logger.error(f"Failed to execute task {task['id']}: {str(e)}")
-                        await self.storage.update_task(task["id"], {"status": TaskStatus.BLOCKED.value})
-                
-                # Wait before checking again
-                await asyncio.sleep(60)  # Adjust based on desired precision
-            except Exception as e:
-                Logger.error(f"Error during task execution loop: {str(e)}")
-
-    async def execute_task(self, agent_id, task_data):
-        """Passes the task to the specified agent for execution."""
-        if agent_id not in self.agent_registry:
-            raise ValueError(f"Agent {agent_id} is not registered.")
-        
-        agent = self.agent_registry[agent_id]
-        Logger.info(f"Passing task to agent {agent_id}: {task_data}")
-        await agent.execute_task(task_data)
-

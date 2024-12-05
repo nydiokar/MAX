@@ -1,5 +1,5 @@
 import asyncio
-from MAX.agents.ollama_agent import OllamaAgent, OllamaAgentOptions
+from Outline.ollama_agent import OllamaAgent, OllamaAgentOptions
 from MAX.types import ConversationMessage, ParticipantRole
 from MAX.utils import Logger
 
@@ -11,7 +11,7 @@ async def test_ollama_agent():
     config = OllamaAgentOptions(
         name="AI Assistant",
         description="A helpful AI assistant powered by Ollama",
-        model_id="llama3.1:8b-instruct-q8_0",
+        model_id="hermes3:8b",
         streaming=True
     )
     

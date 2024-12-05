@@ -1,5 +1,5 @@
 import asyncio
-from MAX.agents.ollama_agent import OllamaAgent, OllamaAgentOptions
+from Outline.ollama_agent import OllamaAgent, OllamaAgentOptions
 from MAX.utils import Logger
 
 async def test_intent_classification():

@@ -44,20 +44,22 @@ class MultiAgentOrchestrator:
         self.state_manager = StateManager(self.db_config)
 
         DEFAULT_CONFIG = OrchestratorConfig()
+################# CREATE CLASSIFIER AND CHECK THE CODE BELOW IT - TaskExpertOptions seems suspicious  ##################
 
-        if use_local_classifier:
-            from MAX.agents import OllamaAgent, OllamaAgentOptions
-            self.classifier = OllamaAgent(
-                options=OllamaAgentOptions(
-                    name="intent_classifier",
-                    model_id="llama3.1:8b-instruct-q8_0",
-                    description="Local intent classifier"
-                )
-            )
-        else:
-            self.classifier = classifier or AnthropicClassifier(
-                options=AnthropicClassifierOptions()
-            )
+       # if use_local_classifier:
+       #     from MAX.adapters.llm import OllamaProvider 
+       #     self.classifier = create_llm_provider(
+        #        "ollama",
+        #        options=OllamaProviderOptions(
+         #           name="intent_classifier",
+          #          model_id="llama3.1:8b-instruct-q8_0",
+           #         description="Local intent classifier"
+            #    )
+           # )
+        #else:
+        #    self.classifier = classifier or AnthropicClassifier(
+         #       options=AnthropicClassifierOptions()
+          #  )
 
 
         if options is None:

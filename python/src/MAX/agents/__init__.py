@@ -1,29 +1,50 @@
 """
 Code for Agents.
 """
-from .options import (
+# Base classes and types
+from .agent import Agent, AgentCallbacks, AgentProcessingResult, AgentResponse
+# Options
+from ..utils.options import (
     BaseAgentOptions,
     AgentOptions,
     AnthropicAgentOptions,
     TaskExpertOptions
 )
-from .agent import Agent, AgentCallbacks, AgentProcessingResult, AgentResponse
+# Interfaces
+from ..utils.interfaces import TaskStorage, NotificationService
+# Model providers   
+from ..adapters.llm import (
+    LLMProvider,
+    OllamaProvider,
+    AnthropicProvider
+)
+# Expert agents
 from .anthropic_agent import AnthropicAgent
 from .task_expert import TaskExpertAgent
-from .ollama_agent import OllamaAgent, OllamaAgentOptions
+
 __all__ = [
+    # Base classes and types
+    'Agent',
+    'AgentCallbacks',
+    'AgentProcessingResult',
+    'AgentResponse',
+    
+    # Options
     'BaseAgentOptions',
     'AgentOptions',
     'AnthropicAgentOptions',
     'TaskExpertOptions',
-    'Agent',
+    
+    # Interfaces
+    'TaskStorage',
+    'NotificationService',
+    
+    # Model providers
+    'LLMProvider',
+    'OllamaProvider', 
+    'AnthropicProvider',
+    
+    # Expert agents
     'AnthropicAgent',
-    'TaskExpertAgent',
-    'ChainAgent',
-    'ChainAgentOptions',
-    'AgentCallbacks',
-    'AgentProcessingResult',
-    'AgentResponse',
-    'OllamaAgent',
-    'OllamaAgentOptions',
+    'TaskExpertAgent'
 ]
