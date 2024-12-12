@@ -1,3 +1,7 @@
+## to be transformed to general purpose agent who is helping when there is too much work, or to serve as a fallback / consultant
+## System-level Reasoning; meta-cognition; orchestration helper; bounce "througts" of other agents;
+
+
 import json
 from typing import List, Dict, Any, AsyncIterable, Optional, Union
 import re

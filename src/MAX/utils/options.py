@@ -20,9 +20,6 @@ class AgentOptions(BaseAgentOptions):
 
 @dataclass
 class AnthropicAgentOptions(AgentOptions):
-    api_key: Optional[str] = None
-    client: Optional[Any] = None
-    model_id: str = "claude-3-5-sonnet-20240620"
     streaming: Optional[bool] = False
     inference_config: Optional[Dict[str, Any]] = None
     retriever: Optional[Retriever] = None
