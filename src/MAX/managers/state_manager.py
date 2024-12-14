@@ -25,24 +25,10 @@ class SystemState:
 class StateManager:
     def __init__(self, config: DatabaseConfig):
         """Initialize state manager with configuration"""
+        self._lock = asyncio.Lock()  # Add lock for state updates
         self.config = config
-        self.mongo_storage = MongoDBChatStorage(
-            mongo_uri=config.mongodb.uri,
-            db_name=config.mongodb.database,
-            collection_name=config.mongodb.state_collection,
-            ttl_index=config.mongodb.ttl_hours * 3600 if config.mongodb.ttl_hours else None
-        )
-    
-        if config.state_manager.enable_vector_storage:
-            self.vector_storage = ChromaDBChatStorage(
-                collection_name=config.chromadb.collection_name
-            )
-        else:
-            self.vector_storage = None
-
-        # Initialize storages
-        asyncio.create_task(self._initialize_storages())
-        
+        self.mongo_storage = None
+        self.vector_storage = None
         self.system_state = SystemState(
             agent_states={},
             conversation_states={},
@@ -50,22 +36,24 @@ class StateManager:
             timestamp=datetime.now(timezone.utc)
         )
 
-        # Start background tasks
-        asyncio.create_task(self._run_periodic_cleanup())
-        asyncio.create_task(self._run_periodic_state_persistence())
-        asyncio.create_task(self._run_periodic_health_check())
-
     async def _initialize_storages(self) -> bool:
-        """Initialize all storage systems"""
+        """Initialize storage systems and restore state"""
         try:
+            if not self.mongo_storage:
+                self.mongo_storage = MongoDBChatStorage(
+                    mongo_uri=self.config.mongodb.uri,
+                    db_name=self.config.mongodb.database,
+                    collection_name=self.config.mongodb.state_collection
+                )
+            
             mongo_init = await self.mongo_storage.initialize()
             if not mongo_init:
                 raise RuntimeError("Failed to initialize MongoDB storage")
 
-            if self.vector_storage:
-                vector_init = await self.vector_storage.initialize()
-                if not vector_init:
-                    raise RuntimeError("Failed to initialize vector storage")
+            # Restore system state
+            stored_state = await self.mongo_storage.get_system_state()
+            if stored_state:
+                self.system_state = SystemState(**stored_state)
 
             return True
         except Exception as e:
@@ -167,38 +155,41 @@ class StateManager:
         message: ConversationMessage,
         metadata: Optional[Dict[str, Any]] = None
     ) -> bool:
-        """Track conversation state with metadata and vector storage"""
-        try:
-            conversation_key = f"{user_id}:{session_id}"
-            current_time = datetime.now(timezone.utc)
-            
-            # Update conversation state
-            state = {
-                "last_message": {
-                    "role": message.role,
-                    "content": message.content,
+        async with self._lock:  # Ensure atomic updates
+            try:
+                # Validate message
+                if not message.content or (isinstance(message.content, list) and len(message.content) == 0):
+                    return False
+
+                conversation_key = f"{user_id}:{session_id}"
+                current_time = datetime.now(timezone.utc)
+                
+                # Update conversation state atomically
+                state = {
+                    "last_message": {
+                        "role": message.role,
+                        "content": message.content,
+                        "timestamp": current_time
+                    },
+                    "metadata": metadata or {},
                     "timestamp": current_time
-                },
-                "metadata": metadata or {},
-                "timestamp": current_time
-            }
-            
-            self.system_state.conversation_states[conversation_key] = state
-            
-            # Persist to MongoDB
-            await self.mongo_storage.save_system_state(
-                state_type=f"CONVERSATION_{conversation_key}",
-                state_data=state
-            )
-            
-            # Save message to both storages
-            await self._save_message_to_storages(user_id, session_id, message, metadata)
-            
-            return True
-            
-        except Exception as e:
-            Logger.error(f"Failed to track conversation state: {str(e)}")
-            return False
+                }
+                
+                # Save state and message atomically
+                self.system_state.conversation_states[conversation_key] = state
+                await self.mongo_storage.save_chat_message(
+                    user_id=user_id,
+                    session_id=session_id,
+                    agent_id="conversation_state",
+                    new_message=message,
+                    metadata=metadata
+                )
+                
+                return True
+                
+            except Exception as e:
+                Logger.error(f"Failed to track conversation state: {str(e)}")
+                return False
 
     async def _save_message_to_storages(
         self,
