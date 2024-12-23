@@ -1,7 +1,7 @@
 from typing import List, Dict, Union, AsyncIterable, Optional
 from MAX.types import ConversationMessage, ParticipantRole
 from MAX.utils import Logger
-from .agent import Agent, AgentOptions
+from .common.agent import Agent, AgentOptions
 
 class ChainAgentOptions(AgentOptions):
     def __init__(self, agents: List[Agent], default_output: Optional[str] = None, **kwargs):

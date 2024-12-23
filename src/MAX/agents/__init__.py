@@ -2,7 +2,7 @@
 Code for Agents.
 """
 # Base classes and types
-from .agent import Agent, AgentCallbacks, AgentProcessingResult, AgentResponse
+from .common.agent import Agent, AgentCallbacks, AgentProcessingResult, AgentResponse
 # Options
 from ..utils.options import (
     BaseAgentOptions,

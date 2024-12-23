@@ -1,3 +1,15 @@
 [build-system]
    requires = ["setuptools>=72.1"]
    build-backend = "setuptools.build_meta"
+[tool.pytest.ini_options]
+     asyncio_mode = "auto"
+     timeout = 300
+     pythonpath = ["src"]
+     testpaths = ["src/tests"]
+     # Add these recommended settings:
+     filterwarnings = [
+         "ignore::DeprecationWarning",
+         "ignore::UserWarning",
+     ]
+     log_cli = true
+     log_cli_level = "INFO"

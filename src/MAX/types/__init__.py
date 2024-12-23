@@ -1,5 +1,5 @@
 """Module for importing types."""
-from .types import (
+from .base_types import (
     ConversationMessage,
     ParticipantRole,
     TimestampedMessage,

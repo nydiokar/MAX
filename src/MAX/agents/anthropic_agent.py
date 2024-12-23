@@ -7,7 +7,7 @@ from typing import List, Dict, Any, AsyncIterable, Optional, Union
 import re
 from anthropic import AsyncAnthropic, Anthropic
 from ..utils.options import AnthropicAgentOptions
-from .agent import Agent
+from .common.agent import Agent
 from MAX.types import (
     ConversationMessage,
     ParticipantRole,

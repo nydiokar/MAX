@@ -1,8 +1,8 @@
-from typing import Dict, Any, Optional, List, Callable
+from typing import Dict, Any, Optional
 from dataclasses import dataclass
 from MAX.retrievers import Retriever   
 from pydantic import field_validator
-from MAX.utils.interfaces import TaskStorage, NotificationService
+
 
 @dataclass
 class BaseAgentOptions:
@@ -25,26 +25,6 @@ class AnthropicAgentOptions(AgentOptions):
     retriever: Optional[Retriever] = None
     tool_config: Optional[Dict[str, Any]] = None
     custom_system_prompt: Optional[Dict[str, Any]] = None
-
-@dataclass
-class TaskExpertOptions(BaseAgentOptions):
-    # Required arguments must come first
-    storage_client: TaskStorage
-    notification_service: NotificationService
-    name: str
-    description: str
-    
-    # Optional arguments with defaults must come after required arguments
-    model_id: str = "hermes3:8b"
-    region: str = "us-east-1"
-    save_chat: bool = True
-    callbacks: Optional[List[Callable]] = None
-    fallback_model_id: Optional[str] = None
-    temperature: float = 0.7
-    max_tokens: int = 2000
-    top_p: float = 0.9
-    default_task_ttl: int = 7
-    retriever: Optional[Retriever] = None
     
     def __post_init__(self):
         if not self.name:
