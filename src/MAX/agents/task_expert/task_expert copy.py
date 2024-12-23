@@ -3,14 +3,14 @@ from typing import List, Dict, Any, Optional, Union, AsyncIterable
 from datetime import datetime, timedelta
 from enum import Enum
 from uuid import uuid4
-from ..utils.interfaces import TaskStorage, NotificationService, TaskStatus, TaskPriority, TaskModel
-from ..types import ConversationMessage, ParticipantRole
-from ..utils import Logger
-from MAX.retrievers import Retriever
+from MAX.storage.protocols import TaskStorage, NotificationService, TaskModel
+from MAX.storage.models import TaskStatus, TaskPriority
+from MAX.types import ConversationMessage, ParticipantRole
+from MAX.utils import Logger
 from MAX.retrievers.kb_retriever import KnowledgeBasesRetrieverOptions, KnowledgeBasesRetriever
-from MAX.adapters.llm import create_llm_provider
-from .agent import Agent
-from ..utils.options import TaskExpertOptions
+from MAX.llms import create_llm_provider
+from agent import Agent
+from config import TaskExpertOptions
 
 class TaskExpertError(Exception):
     """Custom exception class for TaskExpert-specific errors"""

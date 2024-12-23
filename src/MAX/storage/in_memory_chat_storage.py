@@ -2,7 +2,7 @@ from typing import List, Optional, Dict
 from collections import defaultdict
 from MAX.types import ConversationMessage, TimestampedMessage
 from MAX.utils import Logger
-from .chat_storage import ChatStorage
+from .abstract_storage.chat_storage import ChatStorage
 
 
 class InMemoryChatStorage(ChatStorage):

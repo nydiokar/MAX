@@ -1,8 +1,8 @@
 from typing import Dict, Any, List
 from datetime import datetime
-from pydantic import BaseModel, Field
+from pydantic import Field
 from MAX.tools.tool_registry import ToolRegistry, BaseTool, ToolCategory, BaseToolInput, BaseToolOutput
-from storage.interfaces import TaskModel, TaskStatus, TaskPriority
+from storage.utils.models import TaskModel, TaskStatus, TaskPriority
 
 # Input Schemas
 class CreateTaskInput(BaseToolInput):

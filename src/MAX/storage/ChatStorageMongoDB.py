@@ -1,7 +1,7 @@
 from typing import List, Optional, Dict, Any
 from motor.motor_asyncio import AsyncIOMotorClient
 from MAX.types import ConversationMessage, TimestampedMessage
-from MAX.storage.chat_storage import ChatStorage 
+from MAX.storage.abstract_storage.chat_storage import ChatStorage 
 from MAX.utils import Logger
 from datetime import datetime, timezone
 import asyncio
@@ -207,3 +207,4 @@ class MongoDBChatStorage(ChatStorage):
         except Exception as e:
             Logger.error(f"Failed to search MongoDB: {str(e)}")
             return []
+

@@ -4,7 +4,7 @@ from typing import List, Optional, Dict
 from collections import defaultdict
 from MAX.types import ConversationMessage, TimestampedMessage
 from MAX.utils import Logger
-from MAX.storage.chat_storage import ChatStorage  # Changed from chat_storage to .chat_storage
+from Orch.python.src.MAX.storage.abstract_storage.chat_storage import ChatStorage  # Changed from chat_storage to .chat_storage
 from typing import Dict, Any
 from unittest.mock import Mock, AsyncMock
 from MAX.types import (

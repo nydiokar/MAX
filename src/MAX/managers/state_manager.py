@@ -2,8 +2,8 @@ from typing import Dict, Any, Optional, List
 from datetime import datetime, timezone
 from dataclasses import dataclass
 import asyncio
-from MAX.storage.mongoDB import MongoDBChatStorage
-from MAX.storage.chromaDB import ChromaDBChatStorage
+from Orch.python.src.MAX.storage.ChatStorageMongoDB import MongoDBChatStorage
+from Orch.python.src.MAX.storage.ChromaDB import ChromaDBChatStorage
 from MAX.types import ConversationMessage, ParticipantRole
 from MAX.utils import Logger
 from MAX.config.database_config import DatabaseConfig

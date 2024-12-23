@@ -1,7 +1,7 @@
 import chromadb
 from typing import List, Optional, Dict, Any, Tuple
 from MAX.types import ConversationMessage, TimestampedMessage
-from MAX.storage.chat_storage import ChatStorage
+from MAX.storage.abstract_storage.chat_storage import ChatStorage
 from MAX.utils import Logger
 import time
 import asyncio

@@ -1,8 +1,9 @@
 from dataclasses import dataclass
 from typing import Any, Optional, Dict, List, Union
 from MAX.retrievers import Retriever
-from MAX.storage import ChatStorage, ChromaDBChatStorage, MongoDBChatStorage
+from MAX.storage import ChatStorage, ChromaDBChatStorage
 from MAX.utils import Logger
+from Orch.python.src.MAX.storage import ChromaDB
 
 @dataclass
 class KnowledgeBasesRetrieverOptions:
@@ -26,7 +27,7 @@ class KnowledgeBasesRetriever(Retriever):
         try:
             if isinstance(self.storage, ChromaDBChatStorage):
                 return await self._retrieve_from_chroma(text, **kwargs)
-            elif isinstance(self.storage, MongoDBChatStorage):
+            elif isinstance(self.storage, ChromaDB):
                 return await self._retrieve_from_mongo(text, **kwargs)
             else:
                 # Fallback to basic retrieval for other storage types

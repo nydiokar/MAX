@@ -1,6 +1,6 @@
 import asyncio
 from MAX.config.database_config import DatabaseConfig
-from MAX.storage.mongoDB import MongoDBChatStorage
+from Orch.python.src.MAX.storage.ChatStorageMongoDB import MongoDBChatStorage
 from MAX.types import ConversationMessage, ParticipantRole
 from datetime import datetime
 
