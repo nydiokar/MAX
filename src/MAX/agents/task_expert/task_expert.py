@@ -15,7 +15,7 @@ from MAX.retrievers import Retriever
 from MAX.retrievers.kb_retriever import KnowledgeBasesRetrieverOptions, KnowledgeBasesRetriever
 from MAX.agents.agent import Agent
 from MAX.agents.task_expert.options import TaskExpertOptions
-from MAX.agents.task_expert.tool_registry import TaskToolRegistry
+from Orch.python.src.MAX.agents.task_expert.task_tool_registry import TaskToolRegistry
 from MAX.config.llms.llm_config import LLM_CONFIGS
 from MAX.llms.base import AsyncLLMBase
 from MAX.config.llms.ollama import OllamaConfig
