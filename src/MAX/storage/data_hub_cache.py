@@ -8,7 +8,7 @@ from MAX.types import ConversationMessage, TimestampedMessage
 from MAX.utils import Logger
 from MAX.storage import ChatStorage, ChromaDBChatStorage
 from MAX.config.database_config import DatabaseConfig
-from Orch.python.src.MAX.storage import ChromaDB
+from MAX.storage import ChromaDB
 
 # INCLUDE THE NEW STORAGE METHOD!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
 

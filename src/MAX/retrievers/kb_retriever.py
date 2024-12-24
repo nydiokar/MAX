@@ -3,7 +3,7 @@ from typing import Any, Optional, Dict, List, Union
 from MAX.retrievers import Retriever
 from MAX.storage import ChatStorage, ChromaDBChatStorage
 from MAX.utils import Logger
-from Orch.python.src.MAX.storage import ChromaDB
+from MAX.storage import ChromaDB
 
 @dataclass
 class KnowledgeBasesRetrieverOptions:

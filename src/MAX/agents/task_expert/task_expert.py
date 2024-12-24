@@ -4,59 +4,59 @@ from typing import List, Dict, Any, Optional
 from datetime import datetime
 from uuid import uuid4
 
-from MAX.storage.models import TaskStatus, TaskPriority, TaskModel
-from MAX.storage.protocols import TaskStorage, NotificationService
+from MAX.storage.utils.types import TaskStatus, TaskPriority, Task
+from MAX.storage.utils.protocols import TaskStorage, NotificationService
+from MAX.agents.task_expert.errors import (
+    TaskExpertError, ValidationError, ErrorHandler, StorageError,
+    LLMError, DependencyError, MonitoringError, TaskInputModel
+)
 from MAX.utils import Logger
 from MAX.retrievers import Retriever
 from MAX.retrievers.kb_retriever import KnowledgeBasesRetrieverOptions, KnowledgeBasesRetriever
-from MAX.llms import create_llm_provider
 from MAX.agents.agent import Agent
-from MAX.agents.task_expert.config import TaskExpertOptions
+from MAX.agents.task_expert.options import TaskExpertOptions
 from MAX.agents.task_expert.tool_registry import TaskToolRegistry
-
-
-class TaskExpertError(Exception):
-    """Custom exception class for TaskExpert-specific errors."""
-    pass
-
+from MAX.config.llms.llm_config import LLM_CONFIGS
+from MAX.llms.base import AsyncLLMBase
+from MAX.config.llms.ollama import OllamaConfig
+from MAX.config.llms.base import BaseLlmConfig
+# from MAX.config.llms.anthropic import AnthropicConfig  # Uncomment when needed
 
 class TaskExpertAgent(Agent):
     """
     Task Expert Agent is responsible for interpreting user requests related to tasks,
     creating or updating tasks in the database, and optionally sending notifications.
-    
-    Workflow:
-    1. Analyze the user request with the LLM to determine the tasks to create or update.
-    2. Use the registered tools to interact with the task storage (create tasks, update them, etc.).
-    3. Return a structured result indicating what was done.
     """
     def __init__(self, options: TaskExpertOptions):
         super().__init__(options)
-        
-        # Set references to storage and notification services
+
+        # Set references
         self.storage: TaskStorage = options.storage_client
         self.notifications: NotificationService = options.notification_service
         self.default_ttl = options.default_task_ttl
         self.retriever: Optional[Retriever] = options.retriever
-        
-        # Set up the main LLM
-        self.llm = create_llm_provider(
-            engine="ollama",
-            model_id=options.model_id,
-            temperature=options.temperature,
-            max_tokens=options.max_tokens,
-            top_p=options.top_p
+        self.error_handler = ErrorHandler(
+            max_retries=options.max_retries,
+            retry_delay=options.retry_delay
         )
 
-        # Optional fallback LLM
-        if options.fallback_model_id:
-            self.fallback_llm = create_llm_provider(
-                engine="ollama",
-                model_id=options.fallback_model_id
-            )
+        # 1) Grab the final LLM config from the user or the dictionary
+        self.llm_config = options.get_llm_config
 
-        # Set a clear, stable system prompt
-        # This prompt instructs the LLM to always return a structured JSON.
+        # 2) Create the main LLM
+        self.llm = self._create_llm_provider(self.llm_config)
+
+        # 3) Optional fallback (example usage)
+        self.fallback_llm = None
+        if self.llm_config.fallback_model:
+            # If the config has a fallback_model field, try to find it in the dictionary
+            fallback_cfg = LLM_CONFIGS["local"].get(
+                "fast",  # or however you want to pick a fallback
+                LLM_CONFIGS["local"]["general"]
+            )
+            self.fallback_llm = self._create_llm_provider(fallback_cfg)
+
+        # System prompt
         self.system_prompt = (
             "You are a Task Expert agent. You receive a user request and additional context. "
             "Your job is to determine what tasks need to be created or updated. "
@@ -79,47 +79,94 @@ class TaskExpertAgent(Agent):
         # Initialize tool registry for task operations
         self.tools = TaskToolRegistry()
 
+    def _create_llm_provider(self, llm_config: BaseLlmConfig) -> AsyncLLMBase:
+        """Create an LLM instance with the specified config"""
+        from MAX.llms.ollama import OllamaLLM
+        # from MAX.llms.anthropic import AnthropicLLM  # Uncomment when needed
+        
+        if isinstance(llm_config, OllamaConfig):
+            return OllamaLLM(llm_config)
+        # elif isinstance(llm_config, AnthropicConfig):  # Uncomment when needed
+        #     return AnthropicLLM(llm_config)
+        else:
+            import logging
+            logging.warning("Unknown config type; converting to OllamaConfig")
+            # Convert base config to OllamaConfig with defaults
+            llm_config = OllamaConfig(
+                model=llm_config.model or "llama3.1:8b-instruct-q8_0",
+                temperature=llm_config.temperature,
+                max_tokens=llm_config.max_tokens,
+                top_p=llm_config.top_p,
+                resources=llm_config.resources
+            )
+            return OllamaLLM(llm_config)
+
     async def process_request(
         self,
         input_text: str,
         kpu_context: Dict[str, Any]
     ) -> Dict[str, Any]:
-        """
-        Process a task-related request with KPU-enriched context.
-        
-        Steps:
-        1. Analyze the request via the LLM to get a JSON plan.
-        2. Execute the plan using tools (create or update tasks).
-        3. Setup monitoring if required.
-        4. Return a summary of what was done.
-        """
-        analysis = await self._analyze_request(input_text, kpu_context)
+        """Entry point for processing a user request."""
+        try:
+            # 1. Input validation
+            if not input_text.strip():
+                raise ValidationError(
+                    message="Input text cannot be empty",
+                    validation_errors=[{
+                        "loc": ("input",),
+                        "msg": "Input text cannot be empty",
+                        "type": "value_error"
+                    }]
+                )
 
-        # Execute the plan using task management tools
-        tasks_created = []
-        for task in analysis.get("tasks", []):
-            task_type = task.get("type")
-            task_details = task.get("details", {})
-            
-            if task_type == "agent_task":
-                result = await self.tools.execute("create_task", task_details)
-                tasks_created.append(result)
-            elif task_type == "human_task":
-                # Ensure that such a tool exists or handle accordingly
-                result = await self.tools.execute("create_human_task", task_details)
-                tasks_created.append(result)
-            else:
-                Logger.warning(f"Unknown task type encountered: {task_type}")
+            try:
+                # 2. LLM Analysis
+                try:
+                    analysis = await self.error_handler.handle_llm_operation(
+                        self._analyze_request,
+                        input_text,
+                        kpu_context
+                    )
+                except LLMError:
+                    # Directly raise new TaskExpertError
+                    raise TaskExpertError("Failed to process request")
 
-        # Set up monitoring and notifications if specified
-        monitoring_reqs = analysis.get("monitoring_requirements", {})
-        await self._setup_monitoring(tasks_created, monitoring_reqs)
-        
-        return {
-            "tasks_created": tasks_created,
-            "monitoring_setup": monitoring_reqs,
-            "feedback_points": kpu_context.get('feedback_required', [])
-        }
+                # 3. Task Creation
+                tasks_created = []
+                try:
+                    tasks_created = await self._create_and_validate_tasks(analysis.get("tasks", []))
+                except StorageError:
+                    # Directly raise new TaskExpertError
+                    raise TaskExpertError("Failed to process request")
+                except ValidationError as e:
+                    Logger.warning(f"Task validation failed: {str(e)}")
+                    return {"tasks_created": [], "monitoring_setup": "none"}
+
+                # 4. Monitoring Setup
+                monitoring_error = None
+                try:
+                    await self._setup_monitoring(tasks_created, analysis.get("monitoring_requirements", {}))
+                except MonitoringError as me:
+                    monitoring_error = me
+                    Logger.error(f"Monitoring setup failed: {str(me)}")
+
+                return {
+                    "tasks_created": tasks_created,
+                    "monitoring_setup": "partial" if monitoring_error else "complete",
+                    "feedback_points": kpu_context.get('feedback_required', [])
+                }
+
+            except TaskExpertError:
+                raise
+            except Exception as e:
+                Logger.error(f"Unexpected error: {str(e)}")
+                raise TaskExpertError("Failed to process request")
+
+        except ValidationError:
+            raise
+        except Exception as e:
+            Logger.error(f"Unexpected exception: {str(e)}")
+            raise TaskExpertError("Failed to process request")
 
     async def _analyze_request(
         self,
@@ -146,8 +193,7 @@ class TaskExpertAgent(Agent):
         """
 
         response_text = await self.llm.generate(prompt)
-        
-        # Attempt to parse the LLM output as JSON
+
         try:
             analysis = json.loads(response_text)
             if not isinstance(analysis, dict):
@@ -157,6 +203,135 @@ class TaskExpertAgent(Agent):
             analysis = {"tasks": [], "monitoring_requirements": {}}
 
         return analysis
+
+    async def _create_and_validate_tasks(self, tasks_list: List[Dict[str, Any]]) -> List[Any]:
+        """
+        Creates tasks based on the provided list from the LLM analysis.
+        Validates data, handles dependencies, and logs any failures.
+        """
+        tasks_created = []
+        
+        for task in tasks_list:
+            task_type = task.get("type")
+            task_details = task.get("details", {})
+
+            try:
+                # Validate task constraints first
+                await self._validate_task_constraints(task_details)
+
+                # Validate task data using TaskInputModel
+                validated_data = TaskInputModel(**task_details).model_dump(exclude_unset=True)
+
+                # Create the task with the appropriate tool function
+                if task_type == "agent_task":
+                    result = await self.error_handler.handle_storage_operation(
+                        self.tools.execute,
+                        "create_task",
+                        validated_data
+                    )
+                elif task_type == "human_task":
+                    result = await self.error_handler.handle_storage_operation(
+                        self.tools.execute,
+                        "create_human_task",
+                        validated_data
+                    )
+                else:
+                    Logger.warning(f"Unknown task type encountered: {task_type}")
+                    continue
+
+                tasks_created.append(result)
+                Logger.info(f"Task created successfully: {result}")
+
+            except StorageError:
+                # Important: Re-raise StorageError to be caught by process_request
+                raise
+            except ValidationError as e:
+                Logger.warning(f"Task validation failed: {str(e)}")
+                continue
+            except Exception as e:
+                Logger.error(f"Unexpected error during task creation: {str(e)}")
+                continue
+
+        return tasks_created
+
+    async def _setup_monitoring(
+        self,
+        tasks_created: List[Any],
+        monitoring_requirements: Dict[str, Any]
+    ) -> None:
+        """
+        Setup monitoring for created tasks and send notifications.
+        """
+        for task_id in tasks_created:
+            try:
+                # Send task creation notification
+                await self.notifications.send(
+                    "system",
+                    {
+                        "type": "task_created",
+                        "task_id": task_id,
+                        "timestamp": datetime.now().isoformat(),
+                        "requirements": monitoring_requirements.get(task_id, {})
+                    }
+                )
+                
+                # Set up any specific monitoring requirements
+                if task_specific_reqs := monitoring_requirements.get(task_id):
+                    await self._setup_task_specific_monitoring(task_id, task_specific_reqs)
+                    
+                Logger.info(f"Monitoring setup complete for task {task_id}")
+                
+            except Exception as e:
+                raise MonitoringError(
+                    message=f"Monitoring setup failed for task {task_id}: {str(e)}",
+                    monitoring_config={"task_id": task_id}
+                )
+
+    async def _validate_task_constraints(self, task_data: Dict[str, Any]) -> bool:
+        """
+        Validate task constraints before creation.
+        Raises ValidationError if constraints are not met.
+        """
+        try:
+            # Validate due date
+            if due_date := task_data.get('due_date'):
+                if isinstance(due_date, str):
+                    due_date = datetime.fromisoformat(due_date)
+                if due_date < datetime.now():
+                    raise ValidationError(validation_errors=[{
+                        "loc": ("due_date",),
+                        "msg": "Due date cannot be in the past",
+                        "type": "value_error"
+                    }])
+
+            # Validate priority if present
+            if priority := task_data.get('priority'):
+                if priority not in TaskPriority.__members__:
+                    raise ValidationError(validation_errors=[{
+                        "loc": ("priority",),
+                        "msg": f"Invalid priority value: {priority}",
+                        "type": "value_error"
+                    }])
+
+            # Validate task title and description
+            if not task_data.get('title', '').strip():
+                raise ValidationError(validation_errors=[{
+                    "loc": ("title",),
+                    "msg": "Task title cannot be empty",
+                    "type": "value_error"
+                }])
+
+            return True
+        except Exception as e:
+            Logger.error(f"Task validation failed: {str(e)}")
+            raise
+
+    async def _setup_task_specific_monitoring(self, task_id: str, requirements: Dict[str, Any]) -> None:
+        """
+        Helper method to setup task-specific monitoring requirements.
+        """
+        # Implementation can be added based on specific monitoring needs
+        pass
 
     async def _get_model_response(
         self,
@@ -177,7 +352,7 @@ class TaskExpertAgent(Agent):
                 await asyncio.sleep(1)  # Wait before retrying
 
         # If retries are exhausted, attempt fallback model
-        if hasattr(self, 'fallback_llm'):
+        if self.fallback_llm:
             Logger.warning("Attempting fallback model")
             try:
                 return await self.fallback_llm.generate(messages)
@@ -189,9 +364,11 @@ class TaskExpertAgent(Agent):
         raise TaskExpertError("Model failed after retries") from last_exception
 
     async def add_task(self, task_data: Dict[str, Any]) -> str:
-        """Add a new task to the storage."""
+        """
+        Directly add a new task to the storage (example usage).
+        """
         task_id = str(uuid4())
-        task = TaskModel(
+        task = Task(
             id=task_id,
             **task_data,
             created_at=datetime.now(),
@@ -206,31 +383,20 @@ class TaskExpertAgent(Agent):
         task_id: str,
         status: TaskStatus,
         progress: float
-    ) -> TaskModel:
-        """Update the status and progress of an existing task."""
+    ) -> Task:
+        """
+        Update the status and progress of an existing task.
+        """
         task = await self.storage.get_task(task_id)
         if not task:
             raise ValueError(f"Task {task_id} not found")
-            
+
         task.status = status
         task.progress = progress
         task.last_updated = datetime.now()
-        
+
         await self.storage.save_task(task)
         return task
-
-    async def _setup_monitoring(
-        self,
-        tasks_created: List[Any],
-        monitoring_requirements: Dict[str, Any]
-    ) -> None:
-        """
-        Setup monitoring for created tasks if required.
-        Here you can implement notification logic or periodic checks.
-        For now, this is a placeholder.
-        """
-        # Implement your monitoring logic here if needed
-        pass
 
     async def _store_interaction(
         self,
@@ -241,7 +407,9 @@ class TaskExpertAgent(Agent):
         observation: Dict[str, Any],
         next_steps: Dict[str, Any]
     ) -> None:
-        """Store interaction history in the storage."""
+        """
+        Store interaction history in the storage.
+        """
         await self.storage.save_interaction({
             "user_id": user_id,
             "session_id": session_id,

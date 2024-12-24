@@ -4,7 +4,7 @@ import sys
 import pytest
 import asyncio
 from .test_utils import reporter, TEST_CONFIG
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch, MagicMock, AsyncMock
 from typing import Dict, Any
 from _pytest.terminal import TerminalReporter
 
@@ -103,3 +103,13 @@ def pytest_runtest_makereport(item, call):
             if hasattr(report, 'longrepr'):
                 print(f"Error: {str(report.longrepr)}")
         print(f"{'='*80}")
+
+@pytest.fixture
+def task_expert_options():
+    options = MagicMock()
+    options.name = "TestAgent"
+    options.description = "A test agent"
+    options.model_id = "some-model"
+    options.storage_client = AsyncMock()
+    options.notification_service = AsyncMock()
+    return options

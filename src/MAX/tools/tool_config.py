@@ -1,5 +1,5 @@
-from typing import Dict, List, Optional
-from pydantic import BaseModel, Field
+from typing import Dict, List, Optional, Union, Any
+from pydantic import BaseModel, ConfigDict, Field
 from enum import Enum
 
 class ToolPermission(str, Enum):
@@ -15,14 +15,22 @@ class ToolAccessLevel(str, Enum):
     ADMIN = "admin"
 
 class ToolConfig(BaseModel):
-    """Configuration for individual tools"""
+    """Configuration for tools"""
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+    
+    name: str
+    description: Optional[str] = None
     enabled: bool = True
     required_permissions: List[ToolPermission] = [ToolPermission.READ]
     access_level: ToolAccessLevel = ToolAccessLevel.STANDARD
     rate_limit: Optional[int] = None  # Requests per minute
     timeout_seconds: float = 30.0
     max_retries: int = 3
-    custom_settings: Dict[str, any] = Field(default_factory=dict)
+    timeout: float = 30.0
+    cache_enabled: bool = True
+    # Change Dict[str, Any] to more specific types
+    settings: Dict[str, Union[str, int, float, bool, dict, list]] = Field(default_factory=dict)
+    parameters: Dict[str, Union[str, int, float, bool, dict, list]] = Field(default_factory=dict)
 
 class ToolCategoryConfig(BaseModel):
     """Configuration for tool categories"""
@@ -52,10 +60,12 @@ default_config = GlobalToolConfig(
         "file_operation": ToolCategoryConfig(
             tools={
                 "file_reader": ToolConfig(
+                    name="file_reader",  # <— Required field
                     required_permissions=[ToolPermission.READ],
                     access_level=ToolAccessLevel.STANDARD,
                     rate_limit=100,
-                    custom_settings={
+                    # Replace custom_settings with settings (the field in ToolConfig)
+                    settings={
                         "max_file_size_mb": 10,
                         "allowed_extensions": [".txt", ".log", ".csv"]
                     }
@@ -63,4 +73,4 @@ default_config = GlobalToolConfig(
             }
         )
     }
-) 
+)

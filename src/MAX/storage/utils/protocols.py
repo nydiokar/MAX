@@ -1,17 +1,17 @@
 from typing import Dict, Any, Optional, List, Protocol
-from models import TaskModel
+from MAX.storage.utils.types import Task
 
 class TaskStorage(Protocol):
     """
     Protocol for task storage implementations.
     """
-    async def save_task(self, task: TaskModel) -> None:
+    async def save_task(self, task: Task) -> None:
         ...
 
-    async def get_task(self, task_id: str) -> Optional[TaskModel]:
+    async def get_task(self, task_id: str) -> Optional[Task]:
         ...
 
-    async def get_tasks(self, filters: Dict[str, Any]) -> List[TaskModel]:
+    async def get_tasks(self, filters: Dict[str, Any]) -> List[Task]:
         ...
 
     async def delete_task(self, task_id: str) -> None:

@@ -1,26 +1,40 @@
 """
 Code for Agents.
 """
+from typing import TYPE_CHECKING, Optional, Type, Any
+
 # Base classes and types
-from .common.agent import Agent, AgentCallbacks, AgentProcessingResult, AgentResponse
-# Options
-from ..utils.options import (
-    BaseAgentOptions,
-    AgentOptions,
-    AnthropicAgentOptions,
-    TaskExpertOptions
+from MAX.agents.agent import (
+    Agent,
+    AgentCallbacks,
+    AgentProcessingResult,
+    AgentResponse,
+    AgentOptions
 )
+from MAX.agents.options import BaseAgentOptions
+# Options - import these directly from their modules
+from MAX.agents.task_expert.options import TaskExpertOptions
 # Interfaces
-from ..utils.interfaces import TaskStorage, NotificationService
-# Model providers   
-from ..adapters.llm import (
-    LLMProvider,
-    OllamaProvider,
-    AnthropicProvider
-)
-# Expert agents
-from .anthropic_agent import AnthropicAgent
-from .task_expert import TaskExpertAgent
+from MAX.storage.utils.protocols import TaskStorage, NotificationService
+# Model providers - import base class
+from MAX.llms.base import AsyncLLMBase as LLMProvider
+# Conditionally import providers to avoid dependency issues
+try:
+    from MAX.llms.ollama import OllamaLLM as OllamaProvider
+except ImportError:
+    OllamaProvider = None
+
+if TYPE_CHECKING:
+    from MAX.agents.task_expert.task_expert import TaskExpertAgent
+
+# Expert agents - lazy import to avoid circular dependencies
+def get_task_expert_agent() -> Optional[Type[Any]]:
+    try:
+        from MAX.agents.task_expert.task_expert import TaskExpertAgent
+        return TaskExpertAgent
+    except ImportError as e:
+        print(f"Failed to import TaskExpertAgent: {e}")
+        return None
 
 __all__ = [
     # Base classes and types
@@ -32,7 +46,6 @@ __all__ = [
     # Options
     'BaseAgentOptions',
     'AgentOptions',
-    'AnthropicAgentOptions',
     'TaskExpertOptions',
     
     # Interfaces
@@ -41,10 +54,8 @@ __all__ = [
     
     # Model providers
     'LLMProvider',
-    'OllamaProvider', 
-    'AnthropicProvider',
+    'OllamaProvider',
     
     # Expert agents
-    'AnthropicAgent',
-    'TaskExpertAgent'
+    'get_task_expert_agent'
 ]
