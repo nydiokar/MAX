@@ -139,7 +139,8 @@ class StateManager:
                     agent_id = state_dict.get('agent_id')
                     if agent_id:
                         self.system_state.agent_states[agent_id] = state_dict
-                except:
+                except Exception as e:
+                    Logger.error(f"Failed to restore system state: {str(e)}")
                     continue
             
             return True

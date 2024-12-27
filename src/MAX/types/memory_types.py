@@ -24,4 +24,5 @@ class MemoryData(BaseModel):
     category: DataCategory
     priority: DataPriority
     content: Dict[str, Any]
-    metadata: Dict[str, Any] = Field(default_factory=dict) 
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+    
