@@ -1,7 +1,6 @@
 import spacy
 from typing import List, Tuple, Dict, Any
 from pydantic import BaseModel, ConfigDict
-import numpy as np
 
 class SemanticMatcherConfig(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)

@@ -20,6 +20,7 @@ from MAX.config.llms.llm_config import LLM_CONFIGS
 from MAX.llms.base import AsyncLLMBase
 from MAX.config.llms.ollama import OllamaConfig
 from MAX.config.llms.base import BaseLlmConfig
+from MAX.llms.ollama import OllamaLLM
 # from MAX.config.llms.anthropic import AnthropicConfig  # Uncomment when needed
 
 class TaskExpertAgent(Agent):
@@ -80,20 +81,18 @@ class TaskExpertAgent(Agent):
             self.retriever = KnowledgeBasesRetriever(retriever_options)
 
         # Initialize tool registry for task operations
-        self.tools = TaskToolRegistry()
+        self.tool_registry = TaskToolRegistry(storage=self.storage)
 
     def _create_llm_provider(self, llm_config: BaseLlmConfig) -> AsyncLLMBase:
-        """Create an LLM instance with the specified config"""
-        from MAX.llms.ollama import OllamaLLM
-        # from MAX.llms.anthropic import AnthropicLLM  # Uncomment when needed
-        
+        """Create an LLM instance with the specified config."""
         if isinstance(llm_config, OllamaConfig):
             return OllamaLLM(llm_config)
         # elif isinstance(llm_config, AnthropicConfig):  # Uncomment when needed
         #     return AnthropicLLM(llm_config)
         else:
-            import logging
-            logging.warning("Unknown config type; converting to OllamaConfig")
+            # Here we now use our custom Logger instead of the built-in logging:
+            Logger.warn("Unknown config type; converting to OllamaConfig")
+
             # Convert base config to OllamaConfig with defaults
             llm_config = OllamaConfig(
                 model=llm_config.model or "llama3.1:8b-instruct-q8_0",
@@ -242,13 +241,13 @@ class TaskExpertAgent(Agent):
                 # Create the task with the appropriate tool function
                 if task_type == "agent_task":
                     result = await self.error_handler.handle_storage_operation(
-                        self.tools.execute,
+                        self.tool_registry.execute,
                         "create_task",
                         validated_data
                     )
                 elif task_type == "human_task":
                     result = await self.error_handler.handle_storage_operation(
-                        self.tools.execute,
+                        self.tool_registry.execute,
                         "create_human_task",
                         validated_data
                     )

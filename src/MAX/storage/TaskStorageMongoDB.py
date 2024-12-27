@@ -412,22 +412,79 @@ class MongoDBTaskStorage(TaskStorage):
         certain fields (title, description, etc.). For updates, require
         at least one valid field out of the allowed set.
         """
-        if task_id is None:
-            # For new tasks, require these fields
-            required_fields = {"title", "description", "status", "priority", "assigned_agent"}
-            update_fields = set(updates.keys())
-            Logger.debug(f"Required fields: {required_fields}")
-            Logger.debug(f"Provided fields: {update_fields}")
-            return all(field in update_fields for field in required_fields)
-        else:
-            # For existing tasks, allow any valid field
+        try:
+            # For new tasks (task_id is None)
+            if task_id is None:
+                required_fields = {"title", "description", "status", "priority", "assigned_agent"}
+                if not all(field in updates for field in required_fields):
+                    Logger.error(f"Missing required fields. Required: {required_fields}")
+                    return False
+                
+                # Field length validations
+                if len(updates.get('title', '')) > 200:
+                    Logger.error("Title too long (max 200 chars)")
+                    return False
+                if len(updates.get('description', '')) > 5000:
+                    Logger.error("Description too long (max 5000 chars)")
+                    return False
+
+                # Validate due date for new tasks
+                if due_date := updates.get('due_date'):
+                    if isinstance(due_date, str):
+                        try:
+                            due_date = datetime.fromisoformat(due_date)
+                        except ValueError:
+                            Logger.error("Invalid due_date format")
+                            return False
+                    if due_date < datetime.now(timezone.utc):
+                        Logger.error("Due date cannot be in the past")
+                        return False
+
+            # Common validations for both new and updates
             valid_fields = {
                 "title", "description", "status", "priority",
                 "assigned_agent", "due_date", "dependencies",
                 "progress", "metadata", "tags"
             }
             update_fields = set(updates.keys())
-            return bool(update_fields & valid_fields)
+            invalid_fields = update_fields - valid_fields
+            if invalid_fields:
+                Logger.error(f"Invalid fields detected: {invalid_fields}")
+                return False
+
+            # Type validations
+            if 'progress' in updates and not isinstance(updates['progress'], (int, float)):
+                Logger.error("Progress must be a number")
+                return False
+            if 'progress' in updates and not (0 <= updates['progress'] <= 100):
+                Logger.error("Progress must be between 0 and 100")
+                return False
+
+            # Enum validations
+            if 'status' in updates and updates['status'] not in TaskStatus.__members__.values():
+                Logger.error(f"Invalid status value: {updates['status']}")
+                return False
+            if 'priority' in updates and updates['priority'] not in TaskPriority.__members__.values():
+                Logger.error(f"Invalid priority value: {updates['priority']}")
+                return False
+
+            # Validate due date for updates
+            if due_date := updates.get('due_date'):
+                if isinstance(due_date, str):
+                    try:
+                        due_date = datetime.fromisoformat(due_date)
+                    except ValueError:
+                        Logger.error("Invalid due_date format")
+                        return False
+                if due_date < datetime.now(timezone.utc):
+                    Logger.error("Due date cannot be in the past")
+                    return False
+
+            return True
+            
+        except Exception as e:
+            Logger.error(f"Validation error: {str(e)}")
+            return False
 
     async def get_prioritized_tasks(
         self,

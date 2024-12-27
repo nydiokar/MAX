@@ -2,9 +2,9 @@ from typing import Optional
 from pathlib import Path
 from pydantic_settings import BaseSettings, SettingsConfigDict
 import os
-import logging
+from MAX.utils.logger import Logger
 
-logger = logging.getLogger(__name__)
+logger = Logger.get_logger()
 
 # Get the project root directory (python directory)
 ROOT_DIR = Path(__file__).parent.parent.parent.parent

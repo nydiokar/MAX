@@ -1,8 +1,9 @@
 from typing import Dict, Any, Optional, List
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 import asyncio
-from pydantic import BaseModel, ValidationError, Field, field_validator
+from pydantic import BaseModel, ValidationError, Field, field_validator, model_validator
+from MAX.storage.utils.types import TaskPriority
 
 class ErrorSeverity(Enum):
     LOW = "low"
@@ -151,7 +152,7 @@ async def recover_from_notification_error(error: NotificationError, fallback_cha
 class TaskInputModel(BaseModel):
     title: str
     description: Optional[str] = None
-    priority: str
+    priority: TaskPriority
     due_date: Optional[datetime] = None
     assigned_agent: Optional[str] = None
     dependencies: List[str] = Field(default_factory=list)
@@ -160,27 +161,44 @@ class TaskInputModel(BaseModel):
     
     @field_validator('title')
     def title_not_empty(cls, v):
-        if not v.strip():
+        v = v.strip()
+        if not v:
             raise ValueError('Title cannot be empty')
-        return v.strip()
+        if len(v) > 200:  # Reasonable limit for title
+            raise ValueError('Title too long (max 200 characters)')
+        return v
     
-    @field_validator('priority')
-    def validate_priority(cls, v):
-        valid_priorities = ['LOW', 'MEDIUM', 'HIGH', 'URGENT']
-        if v.upper() not in valid_priorities:
-            raise ValueError(f'Priority must be one of: {valid_priorities}')
-        return v.upper()
+    @field_validator('description')
+    def description_format(cls, v):
+        if v is not None:
+            v = v.strip()
+            if len(v) > 5000:  # Reasonable limit for description
+                raise ValueError('Description too long (max 5000 characters)')
+        return v
+    
+    @field_validator('due_date')
+    def due_date_not_past(cls, v):
+        if v and v < datetime.now(timezone.utc):
+            raise ValueError('Due date cannot be in the past')
+        return v
     
     @field_validator('estimated_hours')
     def validate_hours(cls, v):
-        if v is not None and v <= 0:
-            raise ValueError('Estimated hours must be positive')
+        if v is not None:
+            if v <= 0:
+                raise ValueError('Estimated hours must be positive')
+            if v > 1000:  # Reasonable upper limit
+                raise ValueError('Estimated hours too high')
         return v
+    
+    @model_validator(mode='after')
+    def check_dependencies(self):
+        if len(self.dependencies) > 20:  # Reasonable limit for dependencies
+            raise ValueError('Too many dependencies (max 20)')
+        return self
 
-async def validate_task_input(task_data: Dict[str, Any]) -> Dict[str, Any]:
-    """Validate task input data against schema"""
-    try:
-        validated = TaskInputModel(**task_data)
-        return validated.model_dump(exclude_unset=True)
-    except ValidationError as e:
-        raise ValidationError("Invalid task data", e.errors())
+    @model_validator(mode='after')
+    def check_tags(self):
+        if len(self.tags) > 10:  # Reasonable limit for tags
+            raise ValueError('Too many tags (max 10)')
+        return self
