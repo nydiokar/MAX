@@ -82,16 +82,30 @@ class MongoDBTaskStorage(TaskStorage):
     async def _setup_indices(self):
         """
         Set up indices for the tasks and execution history collections.
-        Raises an exception if index creation fails.
         """
         try:
+            # Existing indices
             await self.tasks.create_index([("task_id", 1)], unique=True)
             await self.tasks.create_index([("status", 1), ("priority", 1), ("due_date", 1)])
             await self.tasks.create_index([("status", 1), ("assigned_agent", 1)])
             await self.tasks.create_index([("priority", 1)])
             await self.tasks.create_index([("due_date", 1)])
             await self.tasks.create_index([("dependencies", 1)])
+            
+            # New indices for priority-based querying
+            await self.tasks.create_index([
+                ("status", 1),
+                ("priority_score", -1),
+                ("due_date", 1)
+            ])
+            
+            # Text indices for content search
+            await self.tasks.create_index([
+                ("title", "text"),
+                ("description", "text")
+            ])
 
+            # Execution history indices
             await self.execution_history.create_index([("task_id", 1), ("timestamp", -1)])
             await self.execution_history.create_index([("entry_id", 1)], unique=True)
 
@@ -351,7 +365,7 @@ class MongoDBTaskStorage(TaskStorage):
                 # Convert ObjectId to string
                 if "_id" in task:
                     task["_id"] = str(task["_id"])
-                # Convert string values back to Enums
+                # Convert strings back to Enums
                 if "status" in task:
                     task["status"] = TaskStatus(task["status"])
                 if "priority" in task:
@@ -414,3 +428,61 @@ class MongoDBTaskStorage(TaskStorage):
             }
             update_fields = set(updates.keys())
             return bool(update_fields & valid_fields)
+
+    async def get_prioritized_tasks(
+        self,
+        filters: Optional[Dict[str, Any]] = None,
+        limit: int = 10
+    ) -> List[Task]:
+        """
+        Get tasks ordered by priority score.
+        
+        Args:
+            filters: Optional dictionary of filter criteria
+            limit: Maximum number of tasks to return
+            
+        Returns:
+            List of Task objects ordered by priority score
+        """
+        try:
+            query = filters or {}
+            
+            # Convert any enum values in filters to strings
+            query = self._convert_enums_to_str(query)
+            
+            # Use find() to get a cursor and convert to list
+            cursor = self.tasks.find(query)
+            
+            # Apply sort and limit
+            cursor = cursor.sort([
+                ("priority_score", -1),
+                ("due_date", 1)
+            ]).limit(limit)
+            
+            # Handle both real MongoDB cursor and mock list
+            if hasattr(cursor, 'to_list'):
+                tasks_list = await cursor.to_list(length=limit)
+            else:
+                # For mocks that return a list directly
+                tasks_list = cursor
+            
+            results = []
+            for task in tasks_list:
+                # Convert ObjectId to string
+                if "_id" in task:
+                    task["_id"] = str(task["_id"])
+                    
+                # Convert string values back to Enums
+                if "status" in task:
+                    task["status"] = TaskStatus(task["status"])
+                if "priority" in task:
+                    task["priority"] = TaskPriority(task["priority"])
+                    
+                results.append(Task(**task))
+            
+            Logger.debug(f"Found {len(results)} prioritized tasks matching query {query}")
+            return results
+            
+        except Exception as e:
+            Logger.error(f"Failed to fetch prioritized tasks: {str(e)}")
+            raise TaskStorageError(f"Failed to fetch prioritized tasks: {str(e)}")

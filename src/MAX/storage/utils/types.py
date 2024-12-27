@@ -39,6 +39,7 @@ class Task(BaseModel):
     created_by: str
     tags: List[str] = Field(default_factory=list)
     estimated_hours: Optional[float] = None
+    priority_score: Optional[float] = None
 
     @field_validator('progress')
     @classmethod

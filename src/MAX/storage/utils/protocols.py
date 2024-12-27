@@ -23,6 +23,22 @@ class TaskStorage(Protocol):
     async def save_interaction(self, interaction: Dict[str, Any]) -> None:
         ...
 
+    async def get_prioritized_tasks(
+        self,
+        filters: Optional[Dict[str, Any]] = None,
+        limit: int = 10
+    ) -> List[Task]:
+        """
+        Get tasks ordered by priority score.
+        
+        Args:
+            filters: Optional dictionary of filter criteria
+            limit: Maximum number of tasks to return (default: 10)
+            
+        Returns:
+            List of Task objects ordered by priority score
+        """
+        ...
 
 class NotificationService(Protocol):
     """

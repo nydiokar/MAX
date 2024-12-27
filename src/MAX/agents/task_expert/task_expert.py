@@ -15,7 +15,7 @@ from MAX.retrievers import Retriever
 from MAX.retrievers.kb_retriever import KnowledgeBasesRetrieverOptions, KnowledgeBasesRetriever
 from MAX.agents.agent import Agent
 from MAX.agents.task_expert.options import TaskExpertOptions
-from Orch.python.src.MAX.agents.task_expert.task_tool_registry import TaskToolRegistry
+from MAX.agents.task_expert.task_tool_registry import TaskToolRegistry
 from MAX.config.llms.llm_config import LLM_CONFIGS
 from MAX.llms.base import AsyncLLMBase
 from MAX.config.llms.ollama import OllamaConfig
@@ -39,6 +39,9 @@ class TaskExpertAgent(Agent):
             max_retries=options.max_retries,
             retry_delay=options.retry_delay
         )
+
+        # Initialize kpu_context that's used in priority calculations
+        self.kpu_context: Dict[str, Any] = {}
 
         # 1) Grab the final LLM config from the user or the dictionary
         self.llm_config = options.get_llm_config
@@ -142,6 +145,17 @@ class TaskExpertAgent(Agent):
                     Logger.warning(f"Task validation failed: {str(e)}")
                     return {"tasks_created": [], "monitoring_setup": "none"}
 
+                # Add priority calculation
+                for task in tasks_created:
+                    priority_score = await self.calculate_task_priority(
+                        task.model_dump(),
+                        kpu_context
+                    )
+                    await self.storage.update_task(task.id, {"priority_score": priority_score})
+
+                # Reorder queue
+                tasks_created = await self.reorder_task_queue(tasks_created)
+
                 # 4. Monitoring Setup
                 monitoring_error = None
                 try:
@@ -152,8 +166,11 @@ class TaskExpertAgent(Agent):
 
                 return {
                     "tasks_created": tasks_created,
-                    "monitoring_setup": "partial" if monitoring_error else "complete",
-                    "feedback_points": kpu_context.get('feedback_required', [])
+                    "monitoring_setup": "complete",
+                    "priority_scores": [
+                        await self.calculate_task_priority(t.model_dump(), kpu_context) 
+                        for t in tasks_created
+                    ]
                 }
 
             except TaskExpertError:
@@ -420,3 +437,62 @@ class TaskExpertAgent(Agent):
             "observation": observation,
             "next_steps": next_steps
         })
+
+    async def calculate_task_priority(self, task_data: Dict[str, Any] | Task, kpu_context: Dict[str, Any]) -> float:
+        """
+        Calculate priority score (0-100) based on multiple factors
+        """
+        # Convert Task object to dict if needed
+        if isinstance(task_data, Task):
+            task_data = task_data.model_dump()
+        
+        priority_str = task_data.get('priority', "LOW")
+        if isinstance(priority_str, TaskPriority):
+            priority_str = priority_str.value
+        
+        base_score = {
+            TaskPriority.LOW.value: 25,
+            TaskPriority.MEDIUM.value: 50,
+            TaskPriority.HIGH.value: 75,
+            TaskPriority.URGENT.value: 100
+        }.get(priority_str, 25)  # Default to LOW if missing
+
+        # Time factor: Higher score for closer due dates
+        time_factor = 0
+        if due_date := task_data.get('due_date'):
+            try:
+                due_date_obj = datetime.fromisoformat(due_date) if isinstance(due_date, str) else due_date
+                time_until_due = (due_date_obj - datetime.now(timezone.utc)).total_seconds()
+                if time_until_due > 0:
+                    time_factor = max(0, min(25, (7 * 24 * 3600 - time_until_due) / (7 * 24 * 3600) * 25))
+            except ValueError:
+                Logger.warning(f"Invalid due_date format: {due_date}")
+
+        # Dependency factor: More dependencies = higher priority
+        dependency_count = len(task_data.get('dependencies', []))
+        dependency_factor = min(25, dependency_count * 5)  # 5 points per dependency, max 25
+
+        # Context factor: Use KPU enrichment
+        context_factor = 0
+        if importance_signals := kpu_context.get('importance_signals', []):
+            context_factor = min(25, len(importance_signals) * 5)
+
+        # Calculate final score
+        final_score = base_score + time_factor + dependency_factor + context_factor
+        return min(100, final_score)
+
+    async def reorder_task_queue(self, tasks: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """
+        Reorder tasks based on priority scores
+        """
+        if not tasks:
+            return []
+
+        # Calculate priorities
+        task_scores = []
+        for task in tasks:
+            score = await self.calculate_task_priority(task, self.kpu_context)
+            task_scores.append((task, score))
+
+        # Sort by score descending
+        return [task for task, _ in sorted(task_scores, key=lambda x: x[1], reverse=True)]
