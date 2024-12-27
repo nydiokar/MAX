@@ -25,7 +25,7 @@ from MAX.agents import (
 )
 from MAX.storage import ChatStorage, InMemoryChatStorage
 from MAX.config.database_config import DatabaseConfig
-from MAX.managers.state_manager import StateManager
+from Orch.python.src.MAX.managers.system_state_manager import StateManager
 
 @dataclass
 class MultiAgentOrchestrator:

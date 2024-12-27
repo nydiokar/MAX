@@ -7,7 +7,7 @@ import time
 from MAX.adapters.fetchers.base.fetcher import AbstractFetcher, FetcherConfig
 from MAX.adapters.fetchers.base.types import FetchStatus, FetchResult
 from MAX.storage.ChatStorageMongoDB import MongoDBChatStorage
-from MAX.managers.state_manager import StateManager
+from Orch.python.src.MAX.managers.system_state_manager import StateManager
 from MAX.config.database_config import DatabaseConfig
 from MAX.types import ConversationMessage, ParticipantRole
 from tests.test_utils import TEST_CONFIG

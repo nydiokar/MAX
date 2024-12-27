@@ -29,7 +29,7 @@ def mock_db_config():
 
 @pytest.fixture
 async def state_manager(mock_db_config):
-    from MAX.managers.state_manager import StateManager
+    from Orch.python.src.MAX.managers.system_state_manager import StateManager
     
     # Create state manager with mock storage
     manager = StateManager(mock_db_config)

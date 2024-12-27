@@ -1,7 +1,7 @@
 import asyncio
 import json
 from typing import List, Dict, Any, Optional
-from datetime import datetime
+from datetime import datetime, timezone
 from uuid import uuid4
 
 from MAX.storage.utils.types import TaskStatus, TaskPriority, Task
@@ -383,19 +383,20 @@ class TaskExpertAgent(Agent):
         task_id: str,
         status: TaskStatus,
         progress: float
-    ) -> Task:
-        """
-        Update the status and progress of an existing task.
-        """
-        task = await self.storage.get_task(task_id)
+) -> Task:
+        task = await self.storage.fetch_task(task_id)
         if not task:
             raise ValueError(f"Task {task_id} not found")
 
         task.status = status
         task.progress = progress
-        task.last_updated = datetime.now()
+        task.last_updated = datetime.now(timezone.utc)
 
-        await self.storage.save_task(task)
+        # Use storage's update_task method
+        updated = await self.storage.update_task(task_id, task)
+        if not updated:
+            raise ValueError(f"Failed to update task {task_id}")
+
         return task
 
     async def _store_interaction(
