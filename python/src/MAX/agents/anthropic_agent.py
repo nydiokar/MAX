@@ -1,33 +1,40 @@
+## to be transformed to general purpose agent who is helping when there is too much work, or to serve as a fallback / consultant
+## System-level Reasoning; meta-cognition; orchestration helper; bounce "througts" of other agents;
+
+
 import json
 from typing import List, Dict, Any, AsyncIterable, Optional, Union
 import re
 from anthropic import AsyncAnthropic, Anthropic
-from ..utils.options import AnthropicAgentOptions
-from .agent import Agent
-from MAX.types import (
-    ConversationMessage,
-    ParticipantRole,
-    TemplateVariables
-)
+from MAX.agents.options import AnthropicAgentOptions
+from MAX.agents.agent import Agent
+from MAX.types import ConversationMessage, ParticipantRole, TemplateVariables
 from MAX.utils import conversation_to_dict, Logger
 from MAX.retrievers import Retriever
+
 
 class AnthropicAgent(Agent):
     def __init__(self, options: AnthropicAgentOptions):
         super().__init__(options)
 
         if not options.api_key and not options.client:
-            raise ValueError("Anthropic API key or Anthropic client is required")
+            raise ValueError(
+                "Anthropic API key or Anthropic client is required"
+            )
 
         self.streaming = options.streaming
 
         if options.client:
             if self.streaming:
                 if not isinstance(options.client, AsyncAnthropic):
-                    raise ValueError("If streaming is enabled, the provided client must be an AsyncAnthropic client")
+                    raise ValueError(
+                        "If streaming is enabled, the provided client must be an AsyncAnthropic client"
+                    )
             else:
                 if not isinstance(options.client, Anthropic):
-                    raise ValueError("If streaming is disabled, the provided client must be an Anthropic client")
+                    raise ValueError(
+                        "If streaming is disabled, the provided client must be an Anthropic client"
+                    )
             self.client = options.client
         else:
             if self.streaming:
@@ -35,7 +42,7 @@ class AnthropicAgent(Agent):
             else:
                 self.client = Anthropic(api_key=options.api_key)
 
-        self.system_prompt = ''
+        self.system_prompt = ""
         self.custom_variables = {}
 
         self.default_max_recursions: int = 5
@@ -43,14 +50,17 @@ class AnthropicAgent(Agent):
         self.model_id = options.model_id
 
         default_inference_config = {
-            'maxTokens': 1000,
-            'temperature': 0.1,
-            'topP': 0.9,
-            'stopSequences': []
+            "maxTokens": 1000,
+            "temperature": 0.1,
+            "topP": 0.9,
+            "stopSequences": [],
         }
 
         if options.inference_config:
-            self.inference_config = {**default_inference_config, **options.inference_config}
+            self.inference_config = {
+                **default_inference_config,
+                **options.inference_config,
+            }
         else:
             self.inference_config = default_inference_config
 
@@ -82,7 +92,7 @@ class AnthropicAgent(Agent):
         if options.custom_system_prompt:
             self.set_system_prompt(
                 options.custom_system_prompt.template,
-                options.custom_system_prompt.variables
+                options.custom_system_prompt.variables,
             )
 
     def is_streaming_enabled(self) -> bool:
@@ -94,37 +104,52 @@ class AnthropicAgent(Agent):
         user_id: str,
         session_id: str,
         chat_history: List[ConversationMessage],
-        additional_params: Optional[Dict[str, str]] = None
+        additional_params: Optional[Dict[str, str]] = None,
     ) -> Union[ConversationMessage, AsyncIterable[Any]]:
 
-        messages = [{"role": "user" if msg.role == ParticipantRole.USER.value else "assistant",
-                     "content": msg.content[0]['text'] if msg.content else ''} for msg in chat_history]
+        messages = [
+            {
+                "role": (
+                    "user"
+                    if msg.role == ParticipantRole.USER.value
+                    else "assistant"
+                ),
+                "content": msg.content[0]["text"] if msg.content else "",
+            }
+            for msg in chat_history
+        ]
         messages.append({"role": "user", "content": input_text})
 
         self.update_system_prompt()
         system_prompt = self.system_prompt
 
         if self.retriever:
-            response = await self.retriever.retrieve_and_combine_results(input_text)
+            response = await self.retriever.retrieve_and_combine_results(
+                input_text
+            )
             context_prompt = f"\nHere is the context to use to answer the user's question:\n{response}"
             system_prompt += context_prompt
 
         input = {
             "model": self.model_id,
-            "max_tokens": self.inference_config.get('maxTokens'),
+            "max_tokens": self.inference_config.get("maxTokens"),
             "messages": messages,
             "system": system_prompt,
-            "temperature": self.inference_config.get('temperature'),
-            "top_p": self.inference_config.get('topP'),
-            "stop_sequences": self.inference_config.get('stopSequences'),
+            "temperature": self.inference_config.get("temperature"),
+            "top_p": self.inference_config.get("topP"),
+            "stop_sequences": self.inference_config.get("stopSequences"),
         }
 
         try:
             if self.tool_config:
-                input['tools'] = self.tool_config["tool"]
-                final_message = ''
+                input["tools"] = self.tool_config["tool"]
+                final_message = ""
                 tool_use = True
-                recursions = self.tool_config.get('toolMaxRecursions') if self.tool_config  else self.default_max_recursions
+                recursions = (
+                    self.tool_config.get("toolMaxRecursions")
+                    if self.tool_config
+                    else self.default_max_recursions
+                )
 
                 while tool_use and recursions > 0:
                     if self.streaming:
@@ -132,25 +157,47 @@ class AnthropicAgent(Agent):
                     else:
                         response = await self.handle_single_response(input)
 
-                    tool_use_blocks = [content for content in response.content if content.type == 'tool_use']
+                    tool_use_blocks = [
+                        content
+                        for content in response.content
+                        if content.type == "tool_use"
+                    ]
 
                     if tool_use_blocks:
-                        input['messages'].append({"role": "assistant", "content": response.content})
-                        if not self.tool_config or not self.tool_config.get('useToolHandler'):
+                        input["messages"].append(
+                            {"role": "assistant", "content": response.content}
+                        )
+                        if not self.tool_config or not self.tool_config.get(
+                            "useToolHandler"
+                        ):
                             raise ValueError("No tools available for tool use")
-                        tool_response = await self.tool_config['useToolHandler'](response, input['messages'])
-                        input['messages'].append(tool_response)
+                        tool_response = await self.tool_config[
+                            "useToolHandler"
+                        ](response, input["messages"])
+                        input["messages"].append(tool_response)
                         tool_use = True
                     else:
-                        text_content = next((content for content in response.content if content.type == 'text'), None)
-                        final_message = text_content.text if text_content else ''
+                        text_content = next(
+                            (
+                                content
+                                for content in response.content
+                                if content.type == "text"
+                            ),
+                            None,
+                        )
+                        final_message = (
+                            text_content.text if text_content else ""
+                        )
 
-                    if response.stop_reason == 'end_turn':
+                    if response.stop_reason == "end_turn":
                         tool_use = False
 
                     recursions -= 1
 
-                return ConversationMessage(role=ParticipantRole.ASSISTANT.value, content=[{'text': final_message}])
+                return ConversationMessage(
+                    role=ParticipantRole.ASSISTANT.value,
+                    content=[{"text": final_message}],
+                )
             else:
                 if self.streaming:
                     response = await self.handle_streaming_response(input)
@@ -159,7 +206,7 @@ class AnthropicAgent(Agent):
 
             return ConversationMessage(
                 role=ParticipantRole.ASSISTANT.value,
-                content=[{'text':response.content[0].text}]
+                content=[{"text": response.content[0].text}],
             )
 
         except Exception as error:
@@ -178,7 +225,7 @@ class AnthropicAgent(Agent):
         message = {}
         content = []
         accumulated = {}
-        message['content'] = content
+        message["content"] = content
 
         try:
             async with self.client.messages.stream(**input) as stream:
@@ -186,7 +233,7 @@ class AnthropicAgent(Agent):
                     if event.type == "text":
                         self.callbacks.on_llm_new_token(event.text)
                     elif event.type == "input_json":
-                        message['input'] = json.loads(event.partial_json)
+                        message["input"] = json.loads(event.partial_json)
                     elif event.type == "content_block_stop":
                         recursions = 0
                         break
@@ -198,13 +245,16 @@ class AnthropicAgent(Agent):
             return accumulated
 
         except Exception as error:
-            Logger.error(f"Error getting stream from Anthropic model: {str(error)}")
+            Logger.error(
+                f"Error getting stream from Anthropic model: {str(error)}"
+            )
             raise error
 
-
-    def set_system_prompt(self,
-                          template: Optional[str] = None,
-                          variables: Optional[TemplateVariables] = None) -> None:
+    def set_system_prompt(
+        self,
+        template: Optional[str] = None,
+        variables: Optional[TemplateVariables] = None,
+    ) -> None:
         if template:
             self.prompt_template = template
         if variables:
@@ -213,15 +263,21 @@ class AnthropicAgent(Agent):
 
     def update_system_prompt(self) -> None:
         all_variables: TemplateVariables = {**self.custom_variables}
-        self.system_prompt = self.replace_placeholders(self.prompt_template, all_variables)
+        self.system_prompt = self.replace_placeholders(
+            self.prompt_template, all_variables
+        )
 
     @staticmethod
-    def replace_placeholders(template: str, variables: TemplateVariables) -> str:
+    def replace_placeholders(
+        template: str, variables: TemplateVariables
+    ) -> str:
         def replace(match):
             key = match.group(1)
             if key in variables:
                 value = variables[key]
-                return '\n'.join(value) if isinstance(value, list) else str(value)
+                return (
+                    "\n".join(value) if isinstance(value, list) else str(value)
+                )
             return match.group(0)
 
-        return re.sub(r'{{(\w+)}}', replace, template)
+        return re.sub(r"{{(\w+)}}", replace, template)

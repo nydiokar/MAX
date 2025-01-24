@@ -1,4 +1,6 @@
 from abc import ABC, abstractmethod
+from typing import Any
+
 
 class Retriever(ABC):
     """
@@ -16,7 +18,7 @@ class Retriever(ABC):
         self._options = options
 
     @abstractmethod
-    async def retrieve(self, text: str) -> any:
+    async def retrieve(self, text: str) -> Any:
         """
         Abstract method for retrieving information based on input text.
         This method must be implemented by all concrete subclasses.
@@ -30,7 +32,7 @@ class Retriever(ABC):
         pass
 
     @abstractmethod
-    async def retrieve_and_combine_results(self, text: str) -> any:
+    async def retrieve_and_combine_results(self, text: str) -> Any:
         """
         Abstract method for retrieving information and combining results.
         This method must be implemented by all concrete subclasses.
@@ -45,7 +47,7 @@ class Retriever(ABC):
         pass
 
     @abstractmethod
-    async def retrieve_and_generate(self, text: str) -> any:
+    async def retrieve_and_generate(self, text: str) -> Any:
         """
         Abstract method for retrieving information and generating something based on the results.
         This method must be implemented by all concrete subclasses.

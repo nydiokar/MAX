@@ -4,8 +4,11 @@ from discord import Guild, TextChannel, Message
 from MAX.types import DiscordAdapterConfig
 from MAX.utils.logger import Logger
 
+
 class ChannelManager:
-    def __init__(self, config: DiscordAdapterConfig, logger: Optional[Logger] = None):
+    def __init__(
+        self, config: DiscordAdapterConfig, logger: Optional[Logger] = None
+    ):
         self.config = config
         self.logger = logger or Logger()
         self.recent_messages: Dict[str, List[Message]] = {}
@@ -32,6 +35,10 @@ class ChannelManager:
                 limit=self.config.cache_message_count
             ).flatten()
             self.recent_messages[str(channel.id)] = messages
-            self.logger.info(f"Cached {len(messages)} messages for channel {channel.id}")
+            self.logger.info(
+                f"Cached {len(messages)} messages for channel {channel.id}"
+            )
         except Exception as e:
-            self.logger.error(f"Error caching messages for channel {channel.id}: {str(e)}")
+            self.logger.error(
+                f"Error caching messages for channel {channel.id}: {str(e)}"
+            )

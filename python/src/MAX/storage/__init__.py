@@ -1,6 +1,11 @@
-from .chat_storage import ChatStorage
+from .abstract_storage.chat_storage import ChatStorage
 from .in_memory_chat_storage import InMemoryChatStorage
-from .mongoDB import MongoDBChatStorage
-from .chromaDB import ChromaDBChatStorage
+from .ChatStorageMongoDB import MongoDBChatStorage
+from .ChromaDB import ChromaDBChatStorage
 
-__all__ = ['ChatStorage', 'InMemoryChatStorage', 'MongoDBChatStorage', 'ChromaDBChatStorage']
+__all__ = [
+    "ChatStorage",
+    "InMemoryChatStorage",
+    "ChromaDB",
+    "ChromaDBChatStorage",
+]

@@ -1,5 +1,6 @@
 """Module for importing types."""
-from .types import (
+
+from .base_types import (
     ConversationMessage,
     ParticipantRole,
     TimestampedMessage,
@@ -13,23 +14,22 @@ from .types import (
     DiscordAdapterConfig,
     PlatformAdapter,
     AgentResponse,
-    DatabaseConfig
+    DatabaseConfig,
 )
 
 __all__ = [
-    'ConversationMessage',
-    'ParticipantRole',
-    'TimestampedMessage',
-    'RequestMetadata',
-    'ToolInput',
-    'AgentTypes',
-    'TemplateVariables',
-    'OrchestratorConfig',
-    'ProcessedContent',
-    'DiscordAttachment',
-    'DiscordAdapterConfig',
-    'PlatformAdapter',
-    'AgentResponse',
-    'DatabaseConfig',
+    "ConversationMessage",
+    "ParticipantRole",
+    "TimestampedMessage",
+    "RequestMetadata",
+    "ToolInput",
+    "AgentTypes",
+    "TemplateVariables",
+    "OrchestratorConfig",
+    "ProcessedContent",
+    "DiscordAttachment",
+    "DiscordAdapterConfig",
+    "PlatformAdapter",
+    "AgentResponse",
+    "DatabaseConfig",
 ]
-

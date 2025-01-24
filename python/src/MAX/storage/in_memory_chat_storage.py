@@ -2,7 +2,7 @@ from typing import List, Optional, Dict
 from collections import defaultdict
 from MAX.types import ConversationMessage, TimestampedMessage
 from MAX.utils import Logger
-from .chat_storage import ChatStorage
+from .abstract_storage.chat_storage import ChatStorage
 
 
 class InMemoryChatStorage(ChatStorage):
@@ -13,7 +13,9 @@ class InMemoryChatStorage(ChatStorage):
 
     def __init__(self):
         super().__init__()
-        self.conversations: Dict[str, List[TimestampedMessage]] = defaultdict(list)
+        self.conversations: Dict[str, List[TimestampedMessage]] = defaultdict(
+            list
+        )
 
     async def save_chat_message(
         self,
@@ -40,12 +42,15 @@ class InMemoryChatStorage(ChatStorage):
         timestamped_message = TimestampedMessage(
             role=new_message.role,
             content=new_message.content,
-            timestamp=new_message.timestamp or 0  # Use 0 if no timestamp is provided
+            timestamp=new_message.timestamp
+            or 0,  # Use 0 if no timestamp is provided
         )
         conversation.append(timestamped_message)
 
         # Trim the conversation to the max history size
-        self.conversations[key] = self.trim_conversation(conversation, max_history_size)
+        self.conversations[key] = self.trim_conversation(
+            conversation, max_history_size
+        )
         return True
 
     async def fetch_chat(
@@ -62,7 +67,9 @@ class InMemoryChatStorage(ChatStorage):
         conversation = self.conversations[key]
 
         if max_history_size is not None:
-            conversation = self.trim_conversation(conversation, max_history_size)
+            conversation = self.trim_conversation(
+                conversation, max_history_size
+            )
 
         return self._remove_timestamps(conversation)
 

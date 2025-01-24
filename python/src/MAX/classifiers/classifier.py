@@ -4,27 +4,29 @@ from typing import Dict, List, Optional, Any
 from dataclasses import dataclass
 from MAX.agents import Agent
 from MAX.types import (
-    ConversationMessage, 
-    ParticipantRole,    
+    ConversationMessage,
+    ParticipantRole,
     TemplateVariables,
-    AgentTypes
+    AgentTypes,
 )
+
 
 @dataclass
 class ClassifierResult:
     selected_agent: Optional[Any]
     confidence: float
 
+
 class Classifier(ABC):
     def __init__(self):
         from MAX.agents import AnthropicAgent, AnthropicAgentOptions
-        
+
         self.default_agent = AnthropicAgent(
             options=AnthropicAgentOptions(
                 name=AgentTypes.DEFAULT.value,
                 streaming=True,
                 description="A knowledgeable generalist capable of addressing a wide range of topics.\
-                This agent should be selected if no other specialized agent is a better fit."
+                This agent should be selected if no other specialized agent is a better fit.",
             )
         )
 
@@ -138,16 +140,19 @@ Skip any preamble and provide only the response in the specified format.
         self.agents: Dict[str, Agent] = {}
 
     def set_agents(self, agents: Dict[str, Agent]) -> None:
-        self.agent_descriptions = "\n\n".join(f"{agent.id}:{agent.description}"
-                                              for agent in agents.values())
+        self.agent_descriptions = "\n\n".join(
+            f"{agent.id}:{agent.description}" for agent in agents.values()
+        )
         self.agents = agents
 
     def set_history(self, messages: List[ConversationMessage]) -> None:
         self.history = self.format_messages(messages)
 
-    def set_system_prompt(self,
-                          template: Optional[str] = None,
-                          variables: Optional[TemplateVariables] = None) -> None:
+    def set_system_prompt(
+        self,
+        template: Optional[str] = None,
+        variables: Optional[TemplateVariables] = None,
+    ) -> None:
         if template:
             self.prompt_template = template
         if variables:
@@ -156,21 +161,24 @@ Skip any preamble and provide only the response in the specified format.
 
     @staticmethod
     def format_messages(messages: List[ConversationMessage]) -> str:
-        return "\n".join([
-            f"{message.role}: {' '.join([message.content[0]['text']])}" for message in messages
-        ])
+        return "\n".join(
+            [
+                f"{message.role}: {' '.join([message.content[0]['text']])}"
+                for message in messages
+            ]
+        )
 
-    async def classify(self,
-                       input_text: str,
-                       chat_history: List[ConversationMessage]) -> ClassifierResult:
+    async def classify(
+        self, input_text: str, chat_history: List[ConversationMessage]
+    ) -> ClassifierResult:
         self.set_history(chat_history)
         self.update_system_prompt()
         return await self.process_request(input_text, chat_history)
 
     @abstractmethod
-    async def process_request(self,
-                              input_text: str,
-                              chat_history: List[ConversationMessage]) -> ClassifierResult:
+    async def process_request(
+        self, input_text: str, chat_history: List[ConversationMessage]
+    ) -> ClassifierResult:
         pass
 
     def update_system_prompt(self) -> None:
@@ -179,15 +187,24 @@ Skip any preamble and provide only the response in the specified format.
             "AGENT_DESCRIPTIONS": self.agent_descriptions,
             "HISTORY": self.history,
         }
-        self.system_prompt = self.replace_placeholders(self.prompt_template, all_variables)
+        self.system_prompt = self.replace_placeholders(
+            self.prompt_template, all_variables
+        )
 
     @staticmethod
-    def replace_placeholders(template: str, variables: TemplateVariables) -> str:
+    def replace_placeholders(
+        template: str, variables: TemplateVariables
+    ) -> str:
 
-        return re.sub(r'{{(\w+)}}',
-                      lambda m: '\n'.join(variables.get(m.group(1), [m.group(0)]))
-                      if isinstance(variables.get(m.group(1)), list)
-                      else variables.get(m.group(1), m.group(0)), template)
+        return re.sub(
+            r"{{(\w+)}}",
+            lambda m: (
+                "\n".join(variables.get(m.group(1), [m.group(0)]))
+                if isinstance(variables.get(m.group(1)), list)
+                else variables.get(m.group(1), m.group(0))
+            ),
+            template,
+        )
 
     def get_agent_by_id(self, agent_id: str) -> Optional[Agent]:
         if not agent_id:

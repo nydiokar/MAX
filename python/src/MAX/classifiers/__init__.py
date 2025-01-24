@@ -2,9 +2,11 @@
 Code for Classifier.
 """
 
-
 from .classifier import Classifier, ClassifierResult
-from .anthropic_classifier import AnthropicClassifier, AnthropicClassifierOptions
+from .anthropic_classifier import (
+    AnthropicClassifier,
+    AnthropicClassifierOptions,
+)
 
 
 __all__ = [

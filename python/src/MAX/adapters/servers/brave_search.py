@@ -16,31 +16,31 @@ logger = logging.getLogger("brave-search")
 WEB_SEARCH_TOOL = Tool(
     name="brave_web_search",
     description=(
-        "Performs a web search using the Brave Search API, ideal for general queries, news, articles, and online content. " +
-        "Use this for broad information gathering, recent events, or when you need diverse web sources. " +
-        "Supports pagination, content filtering, and freshness controls. " +
-        "Maximum 20 results per request, with offset for pagination. "
+        "Performs a web search using the Brave Search API, ideal for general queries, news, articles, and online content. "
+        + "Use this for broad information gathering, recent events, or when you need diverse web sources. "
+        + "Supports pagination, content filtering, and freshness controls. "
+        + "Maximum 20 results per request, with offset for pagination. "
     ),
     inputSchema={
-        "type": "object", 
+        "type": "object",
         "properties": {
             "query": {
                 "type": "string",
-                "description": "Search query (max 400 chars)"
+                "description": "Search query (max 400 chars)",
             },
             "count": {
-                "type": "number", 
+                "type": "number",
                 "description": "Results (1-20)",
-                "default": 10
+                "default": 10,
             },
             "offset": {
                 "type": "number",
                 "description": "Pagination offset",
-                "default": 0
-            }
+                "default": 0,
+            },
         },
-        "required": ["query"]
-    }
+        "required": ["query"],
+    },
 )
 
 LOCAL_SEARCH_TOOL = Tool(
@@ -52,19 +52,17 @@ LOCAL_SEARCH_TOOL = Tool(
     inputSchema={
         "type": "object",
         "properties": {
-            "query": {
-                "type": "string", 
-                "description": "Local search query"
-            },
+            "query": {"type": "string", "description": "Local search query"},
             "count": {
                 "type": "number",
                 "default": 5,
-                "description": "Number of results"
-            }
+                "description": "Number of results",
+            },
         },
-        "required": ["query"]
-    }
+        "required": ["query"],
+    },
 )
+
 
 class BraveSearchServer(Server):
     def __init__(self):
@@ -72,11 +70,11 @@ class BraveSearchServer(Server):
         self.api_key = os.getenv("BRAVE_API_KEY")
         if not self.api_key:
             raise ValueError("BRAVE_API_KEY required")
-            
+
         self.http_client = httpx.AsyncClient(
             headers={
                 "Accept": "application/json",
-                "X-Subscription-Token": self.api_key
+                "X-Subscription-Token": self.api_key,
             }
         )
 
@@ -84,11 +82,9 @@ class BraveSearchServer(Server):
     async def list_tools(self) -> list[Tool]:
         return [WEB_SEARCH_TOOL, LOCAL_SEARCH_TOOL]
 
-    @Server.call_tool()  
+    @Server.call_tool()
     async def call_tool(
-        self, 
-        name: str, 
-        arguments: dict
+        self, name: str, arguments: dict
     ) -> Sequence[TextContent | ImageContent | EmbeddedResource]:
         try:
             if name == "brave_web_search":
@@ -102,10 +98,7 @@ class BraveSearchServer(Server):
 
         except Exception as e:
             logger.error(f"Tool error: {str(e)}")
-            return [TextContent(
-                type="text",
-                text=f"Error: {str(e)}"
-            )]
+            return [TextContent(type="text", text=f"Error: {str(e)}")]
 
     async def _web_search(self, args: dict) -> str:
         response = await self.http_client.get(
@@ -113,8 +106,8 @@ class BraveSearchServer(Server):
             params={
                 "q": args["query"],
                 "count": min(args.get("count", 10), 20),
-                "offset": args.get("offset", 0)
-            }
+                "offset": args.get("offset", 0),
+            },
         )
         response.raise_for_status()
         data = response.json()
@@ -133,6 +126,7 @@ class BraveSearchServer(Server):
         # Omitted for brevity but includes POI lookup etc.
         pass
 
+
 async def main():
     server = BraveSearchServer()
     async with stdio_server() as (read, write):
@@ -142,10 +136,12 @@ async def main():
             InitializationOptions(
                 server_name="brave-search",
                 server_version="0.1.0",
-                capabilities=server.get_capabilities()
-            )
+                capabilities=server.get_capabilities(),
+            ),
         )
+
 
 if __name__ == "__main__":
     import asyncio
+
     asyncio.run(main())
