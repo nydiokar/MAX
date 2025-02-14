@@ -22,10 +22,10 @@
 ## Orchestrator Refactor
 1. Refactor Orchestrator to support multi-agent execution
 
-1.1 Modify agent selection logic to dynamically pick agents based on intent classification.
-1.2 Implement task delegation workflows (e.g., Memory → Reasoning → Execution).
- 1.3 Allow multiple agents to collaborate on a single task if required.
-   1.4 Implement a response aggregator (Orchestrator merges multi-agent responses into a final structured reply).
+- 1.1 Modify agent selection logic to dynamically pick agents based on intent classification.
+- 1.2 Implement task delegation workflows (e.g., Memory → Reasoning → Execution).
+- 1.3 Allow multiple agents to collaborate on a single task if required.
+- 1.4 Implement a response aggregator (Orchestrator merges multi-agent responses into a final structured reply).
 
 ## Supervisor Agent
  2. Implement Supervisor Agent for intelligent delegation
