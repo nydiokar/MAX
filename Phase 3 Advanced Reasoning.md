@@ -20,19 +20,19 @@
 ## Implement Introspection Agent
 1. Create a specialized agent responsible for response evaluation
 
-    1.1 Define evaluation criteria (factual accuracy, logical consistency, reasoning clarity).
-    1.2 Allow Orchestrator & Supervisor to request validation from the Introspection Agent.
-    1.3 Implement feedback scoring for agents (track correctness over multiple interactions).
+   - 1.1 Define evaluation criteria (factual accuracy, logical consistency, reasoning clarity).
+   - 1.2 Allow Orchestrator & Supervisor to request validation from the Introspection Agent.
+   - 1.3 Implement feedback scoring for agents (track correctness over multiple interactions).
  
  2. Enable response refinement and verification
 
-    2.1 If a response is uncertain, Supervisor asks Introspection Agent to refine it.
-    2.2 Introspection Agent reassesses and refines the reasoning chain before finalizing output.
+   - 2.1 If a response is uncertain, Supervisor asks Introspection Agent to refine it.
+   - 2.2 Introspection Agent reassesses and refines the reasoning chain before finalizing output.
 
 3. Implement contradiction detection
 
-    3.1 Compare current response with historical responses to detect inconsistencies.
-    3.2 If a contradiction is found, Supervisor Agent reassigns query for review.
+   - 3.1 Compare current response with historical responses to detect inconsistencies.
+   - 3.2 If a contradiction is found, Supervisor Agent reassigns query for review.
 
 💡 Hint: Use embedding similarity techniques to compare responses for internal consistency checks.
 
@@ -46,20 +46,20 @@
 ## Enable Recursive Reasoning
 4. Introduce recursion in reasoning workflows
 
-    4.1 Implement multi-step verification loops (if confidence is low, rerun reasoning).
-    4.2 Allow Supervisor to trigger a reasoning reset when a faulty step is detected.
-    4.3 Ensure recursion stops at a maximum depth (to prevent infinite loops).
+   - 4.1 Implement multi-step verification loops (if confidence is low, rerun reasoning).
+   - 4.2 Allow Supervisor to trigger a reasoning reset when a faulty step is detected.
+   - 4.3 Ensure recursion stops at a maximum depth (to prevent infinite loops).
 
 5. Optimize task scheduling based on past performance
 
-    5.1 Assign more complex tasks to higher-performing agents (based on feedback scoring).
-    5.2 Track which agents perform best under different types of reasoning queries.
+   - 5.1 Assign more complex tasks to higher-performing agents (based on feedback scoring).
+   - 5.2 Track which agents perform best under different types of reasoning queries.
 
 6. Improve Confidence Scoring Mechanisms
 
-    6.1 Agents should rate their own confidence in responses
-    6.2 Define scoring scale (e.g., 0.0 - 1.0 confidence).
-    6.3 If confidence is too low, trigger recursive reasoning before finalizing the output.
+   - 6.1 Agents should rate their own confidence in responses
+   - 6.2 Define scoring scale (e.g., 0.0 - 1.0 confidence).
+   - 6.3 If confidence is too low, trigger recursive reasoning before finalizing the output.
 
 💡 Hint: Use fuzzy logic to implement uncertainty thresholds that control recursion depth.
 
@@ -73,19 +73,19 @@
 ## Implement Error Tracking & Analysis
 7. Introduce an error log that tracks incorrect responses
 
-    7.1 Log failed or inaccurate reasoning steps for debugging.
-    7.2 Track which agent produced the error and adjust reasoning accordingly.
+   - 7.1 Log failed or inaccurate reasoning steps for debugging.
+   - 7.2 Track which agent produced the error and adjust reasoning accordingly.
 
 8. Enable response correction mechanisms
 
-    8.1 Allow Supervisor to flag incorrect outputs and request revisions.
-    8.2 Introspection Agent compares current responses with previous mistakes to avoid repeating errors.
+   - 8.1 Allow Supervisor to flag incorrect outputs and request revisions.
+   - 8.2 Introspection Agent compares current responses with previous mistakes to avoid repeating errors.
 
 ## Integrate Self-Optimization & Learning
 9. Enable system-wide learning from past mistakes
 
-    9.1 Agents update internal knowledge bases when errors are detected.
-    9.2 If the same mistake occurs repeatedly, Supervisor automatically reconfigures reasoning paths.
+   - 9.1 Agents update internal knowledge bases when errors are detected.
+   - 9.2 If the same mistake occurs repeatedly, Supervisor automatically reconfigures reasoning paths.
 
 💡 Hint: Introduce a knowledge reinforcement loop where incorrect answers update knowledge embeddings to avoid repeating mistakes.
 
