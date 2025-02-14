@@ -49,7 +49,7 @@ class DiscordAdapter(PlatformAdapter):
 
             # Process content and attachments
             return await self._attachment_manager.process_message_content(
-                message.content[len(self.config.command_prefix) :],
+                message.content[len(self.config.command_prefix):],
                 [a.__dict__ for a in message.attachments],
             )
         except Exception as e:
