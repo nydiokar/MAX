@@ -1,5 +1,5 @@
 # base_llm.py
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Optional
 
 
@@ -19,6 +19,13 @@ class ResourceConfig:
     cost_per_token: float = 0.0
     priority: int = 1
     local_only: bool = False
+
+
+def create_resource_config() -> ResourceConfig:
+    try:
+        return ResourceConfig()
+    except Exception as e:
+        raise ValueError(f"Failed to create ResourceConfig: {str(e)}") from e
 
 
 @dataclass
@@ -41,7 +48,7 @@ class BaseLlmConfig:
     temperature: float = 0.7
     max_tokens: int = 2000
     top_p: float = 1.0
-    resources: ResourceConfig = ResourceConfig()
+    resources: ResourceConfig = field(default_factory=create_resource_config)
 
     # Additional optional fields often needed by remote or local providers
     api_base_url: Optional[str] = None

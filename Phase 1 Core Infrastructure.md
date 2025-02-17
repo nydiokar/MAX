@@ -108,17 +108,17 @@
    - 8.2 Ensure message routing logic is clear (Supervisor directs messages properly).
    - 8.3 Implement priority queues (urgent tasks are processed first).
 
-## Enable Agents to Query Memory & Request Context
+  9. Enable Agents to Query Memory & Request Context
 
-   - 8.4 Memory Agent exposes API for knowledge lookups.
-   - 8.5 If a response lacks context, agents should automatically request memory enrichment.
-   - 8.6 Implement Supervisor-driven escalation (if an agent is stuck, the Supervisor reassigns the query).
+   - 9.1 Memory Agent exposes API for knowledge lookups.
+   - 9.2 If a response lacks context, agents should automatically request memory enrichment.
+   - 9.3 Implement Supervisor-driven escalation (if an agent is stuck, the Supervisor reassigns the query).
 
 ## Logging & Debugging
- 9. Implement full agent logging for debugging
+ 10. Implement full agent logging for debugging
 
-   - 9.1 Each agent should log incoming & outgoing requests.
-   - 9.2 Log all Supervisor delegation decisions to analyze efficiency.
+   - 10.1 Each agent should log incoming & outgoing requests.
+   - 10.2 Log all Supervisor delegation decisions to analyze efficiency.
 
 💡 Hint: Logging should be lightweight but provide enough data to diagnose inter-agent workflow problems.
 

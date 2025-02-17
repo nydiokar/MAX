@@ -1,7 +1,8 @@
 import asyncio
-from typing import Dict, Any, AsyncIterable, Optional, Union
+from typing import Dict, Any, AsyncIterable, Optional, Union, List
 from dataclasses import dataclass, fields, asdict, replace
 import time
+from MAX.types.workflow_types import WorkflowStage, WorkflowContext
 from MAX.utils.logger import Logger
 from MAX.types import (
     ConversationMessage,
@@ -25,8 +26,8 @@ from MAX.agents import (
 )
 from MAX.storage import ChatStorage, InMemoryChatStorage
 from MAX.config.database_config import DatabaseConfig
-from Orch.python.src.MAX.managers.system_state_manager import StateManager
-
+from MAX.managers.system_state_manager import StateManager
+from MAX.managers.workflow_manager import WorkflowManager
 
 @dataclass
 class MultiAgentOrchestrator:
@@ -41,8 +42,9 @@ class MultiAgentOrchestrator:
         # Initialize database configuration
         self.db_config = DatabaseConfig()
 
-        # Initialize state manager with config
+        # Initialize managers
         self.state_manager = StateManager(self.db_config)
+        self.workflow_manager = WorkflowManager()
 
         DEFAULT_CONFIG = OrchestratorConfig()
         ################# CREATE CLASSIFIER AND CHECK THE CODE BELOW IT - TaskExpertOptions seems suspicious  ##################
@@ -170,7 +172,15 @@ class MultiAgentOrchestrator:
         self.execution_times.clear()
 
         try:
-            # Track initial conversation state
+            # Create or get workflow context
+            workflow = await self.workflow_manager.create_workflow(
+                session_id=session_id,
+                user_id=user_id,
+                initial_input=user_input,
+                metadata=additional_params
+            )
+
+            # Track conversation state
             await self.state_manager.track_conversation_state(
                 user_id=user_id,
                 session_id=session_id,
@@ -180,9 +190,15 @@ class MultiAgentOrchestrator:
                 metadata=additional_params,
             )
 
-            chat_history = (
-                await self.storage.fetch_all_chats(user_id, session_id) or []
+            # Memory Stage: Fetch context
+            chat_history = await self.storage.fetch_all_chats(user_id, session_id) or []
+            await self.workflow_manager.transition_stage(
+                session_id,
+                WorkflowStage.MEMORY,
+                {"chat_history": chat_history}
             )
+
+            # Reasoning Stage: Classify intent and select agent
             classifier_result: ClassifierResult = (
                 await self.measure_execution_time(
                     "Classifying user intent",
@@ -193,27 +209,50 @@ class MultiAgentOrchestrator:
             if self.config.LOG_CLASSIFIER_OUTPUT:
                 self.print_intent(user_input, classifier_result)
 
+            # Transition to reasoning stage
+            await self.workflow_manager.transition_stage(
+                session_id,
+                WorkflowStage.REASONING,
+                {
+                    "intents": classifier_result.intents,
+                    "selected_agent": classifier_result.selected_agent.name if classifier_result.selected_agent else None,
+                    "confidence": classifier_result.confidence
+                }
+            )
+
+            # Handle agent selection failures
             if not classifier_result.selected_agent:
-                if self.config.USE_DEFAULT_AGENT_IF_NONE_IDENTIFIED:
-                    classifier_result = self.get_fallback_result()
-                    self.logger.info(
-                        "Using default agent as no agent was selected"
-                    )
-                else:
-                    return AgentResponse(
-                        metadata=self.create_metadata(
-                            classifier_result,
-                            user_input,
-                            user_id,
-                            session_id,
-                            additional_params,
-                        ),
-                        output=ConversationMessage(
-                            role=ParticipantRole.ASSISTANT.value,
-                            content=self.config.NO_SELECTED_AGENT_MESSAGE,
-                        ),
-                        streaming=False,
-                    )
+                await self._handle_agent_selection_failure(
+                    classifier_result, 
+                    workflow,
+                    user_input,
+                    user_id,
+                    session_id,
+                    additional_params
+                )
+                return
+                
+            # Validate agent before execution
+            if not await self._validate_agent(classifier_result.selected_agent):
+                await self.workflow_manager.mark_workflow_failed(
+                    session_id,
+                    f"Agent {classifier_result.selected_agent.name} failed validation"
+                )
+                self.logger.error(f"Selected agent {classifier_result.selected_agent.name} failed validation")
+                return AgentResponse(
+                    metadata=self.create_metadata(
+                        classifier_result,
+                        user_input,
+                        user_id,
+                        session_id,
+                        additional_params,
+                    ),
+                    output=ConversationMessage(
+                        role=ParticipantRole.ASSISTANT.value,
+                        content="The selected agent is currently unavailable. Please try again later.",
+                    ),
+                    streaming=False,
+                )
 
             try:
                 agent_response = await self.dispatch_to_agent(
@@ -364,17 +403,95 @@ class MultiAgentOrchestrator:
             base_metadata.additional_params["error_type"] = (
                 "classification_failed"
             )
+            if intent_classifier_result and intent_classifier_result.fallback_reason:
+                base_metadata.additional_params["failure_reason"] = intent_classifier_result.fallback_reason
+            if intent_classifier_result and intent_classifier_result.intents:
+                base_metadata.additional_params["detected_intents"] = ",".join(intent_classifier_result.intents)
         else:
             base_metadata.agent_id = intent_classifier_result.selected_agent.id
-            base_metadata.agent_name = (
-                intent_classifier_result.selected_agent.name
-            )
+            base_metadata.agent_name = intent_classifier_result.selected_agent.name
+            if intent_classifier_result.intents:
+                base_metadata.additional_params["detected_intents"] = ",".join(intent_classifier_result.intents)
 
         return base_metadata
 
+    async def _handle_agent_selection_failure(
+        self,
+        classifier_result: ClassifierResult,
+        workflow: WorkflowContext, 
+        user_input: str,
+        user_id: str,
+        session_id: str,
+        additional_params: Dict[str, Any]
+    ) -> AgentResponse:
+        """Handle agent selection failures with workflow awareness."""
+        # Try to get best agent match based on intents
+        if classifier_result.intents:
+            best_agent = self._find_best_agent_for_intents(classifier_result.intents)
+            if best_agent:
+                classifier_result.selected_agent = best_agent
+                classifier_result.confidence = 0.7  # Conservative confidence for fallback
+                self.logger.info(f"Found alternate agent {best_agent.name} based on intents")
+
+                # Update workflow state with fallback selection
+                await self.workflow_manager.transition_stage(
+                    session_id,
+                    WorkflowStage.REASONING,
+                    {
+                        "fallback_agent": best_agent.name,
+                        "fallback_reason": "Intent-based fallback selection",
+                        "confidence": 0.7
+                    }
+                )
+                return True
+
+        # Use default agent as last resort if configured
+        if self.config.USE_DEFAULT_AGENT_IF_NONE_IDENTIFIED:
+            classifier_result = self.get_fallback_result()
+            self.logger.info(f"Using default agent. Detected intents: {classifier_result.intents}")
+            
+            # Update workflow with default agent selection
+            await self.workflow_manager.transition_stage(
+                session_id,
+                WorkflowStage.REASONING,
+                {
+                    "fallback_agent": "DEFAULT",
+                    "fallback_reason": "Using default agent",
+                    "confidence": 0.5
+                }
+            )
+            return True
+
+        # No suitable agent found
+        await self.workflow_manager.mark_workflow_failed(
+            session_id,
+            "No suitable agent found and no default agent configured"
+        )
+
+        return AgentResponse(
+            metadata=self.create_metadata(
+                classifier_result,
+                user_input,
+                user_id,
+                session_id,
+                additional_params,
+            ),
+            output=ConversationMessage(
+                role=ParticipantRole.ASSISTANT.value,
+                content=(
+                    f"{self.config.NO_SELECTED_AGENT_MESSAGE}\n"
+                    f"Detected intents: {classifier_result.intents or []}"
+                ),
+            ),
+            streaming=False,
+        )
+
     def get_fallback_result(self) -> ClassifierResult:
         return ClassifierResult(
-            selected_agent=self.get_default_agent(), confidence=0
+            selected_agent=self.get_default_agent(),
+            confidence=0,
+            intents=["fallback_required"],
+            fallback_reason="Using default agent as fallback"
         )
 
     async def save_message(
@@ -418,6 +535,72 @@ class MultiAgentOrchestrator:
             except Exception as e:
                 self.logger.error(f"Error processing message: {str(e)}")
                 continue
+
+    def _find_best_agent_for_intents(self, intents: List[str]) -> Optional[Agent]:
+        """
+        Find best matching agent based on detected intents.
+        Used as an intelligent fallback when primary agent selection fails.
+        """
+        best_score = 0
+        best_agent = None
+
+        for agent in self.agents.values():
+            score = 0
+            if hasattr(agent, 'capabilities'):
+                # Check for direct intent matches in capabilities
+                matching_caps = [cap for cap in agent.capabilities if any(i in cap for i in intents)]
+                if matching_caps:
+                    score += len(matching_caps) / len(agent.capabilities)
+
+            if hasattr(agent, 'specializations'):
+                # Check for specialization matches
+                matching_specs = [spec for spec in agent.specializations if any(i in spec for i in intents)]
+                if matching_specs:
+                    score += len(matching_specs)
+
+            # Consider agent's historical success with similar intents
+            if hasattr(agent, 'success_rate'):
+                score *= (1 + agent.success_rate)
+
+            if score > best_score:
+                best_score = score
+                best_agent = agent
+
+        return best_agent if best_score > 0.3 else None  # Require minimum match quality
+
+    async def _validate_agent(self, agent: Agent) -> bool:
+        """
+        Validate agent availability and readiness.
+        """
+        if not agent:
+            return False
+
+        try:
+            # Basic interface check
+            if not hasattr(agent, 'process_request') or not callable(getattr(agent, 'process_request')):
+                self.logger.error(f"Agent {agent.name} lacks required interface")
+                return False
+
+            # Check initialization
+            if hasattr(agent, 'is_initialized') and not agent.is_initialized:
+                self.logger.error(f"Agent {agent.name} not properly initialized")
+                return False
+
+            # Check state if available
+            if hasattr(agent, 'get_state'):
+                state = await agent.get_state()
+                if state.get('status') == 'busy':
+                    self.logger.warning(f"Agent {agent.name} is busy")
+                    return False
+                if state.get('health') == 'unhealthy':
+                    self.logger.error(f"Agent {agent.name} reported unhealthy state")
+                    return False
+
+            return True
+
+        except Exception as e:
+            self.logger.error(f"Error validating agent {agent.name}: {str(e)}")
+            return False
 
     async def shutdown(self):
         self.message_processor_task.cancel()

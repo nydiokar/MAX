@@ -4,7 +4,7 @@ import pytest
 import asyncio
 from typing import List, Dict, Any, Optional
 from unittest.mock import AsyncMock, MagicMock, patch
-from Orch.python.src.MAX.KPU.kpu import KPU
+from MAX.KPU.kpu import KPU
 from MAX.retrievers import Retriever
 
 class MockRetriever(Retriever):

@@ -2,10 +2,9 @@
 from setuptools import setup, find_packages
 
 setup(
-    name="MAX",
-    version="0.1",
-    packages=find_packages(where="src"),
-    package_dir={"": "src"},
+    name="max",
+    version="0.2.2",
+    packages=find_packages(),
     install_requires=[
         "motor>=3.6.0",
         "pymongo>=4.9.2",

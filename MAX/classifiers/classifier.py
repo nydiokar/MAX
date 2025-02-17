@@ -5,30 +5,27 @@ from dataclasses import dataclass
 from MAX.agents import Agent
 from MAX.types import (
     ConversationMessage,
-    ParticipantRole,
     TemplateVariables,
-    AgentTypes,
-)
+    AgentTypes
+    )
 
 
 @dataclass
 class ClassifierResult:
     selected_agent: Optional[Any]
     confidence: float
+    intents: Optional[List[str]] = None
+    fallback_reason: Optional[str] = None
+    capabilities_score: Optional[float] = None
+    required_capabilities: Optional[List[str]] = None
+    matching_capabilities: Optional[List[str]] = None
+    reasoning: Optional[str] = None
 
 
 class Classifier(ABC):
     def __init__(self):
-        from MAX.agents import AnthropicAgent, AnthropicAgentOptions
-
-        self.default_agent = AnthropicAgent(
-            options=AnthropicAgentOptions(
-                name=AgentTypes.DEFAULT.value,
-                streaming=True,
-                description="A knowledgeable generalist capable of addressing a wide range of topics.\
-                This agent should be selected if no other specialized agent is a better fit.",
-            )
-        )
+        """Initialize base classifier without any specific agent dependencies."""
+        self.default_agent: Optional[Agent] = None
 
         self.agent_descriptions = ""
         self.history = ""

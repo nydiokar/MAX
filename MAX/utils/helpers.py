@@ -7,11 +7,12 @@ from MAX.types import ConversationMessage, TimestampedMessage
 
 
 def is_tool_input(input_obj: Any) -> bool:
-    """Check if the input object is a tool input."""
+    """Check if the input object is a tool input from Anthropic API."""
     return (
-        isinstance(input_obj, dict)
-        and "selected_agent" in input_obj
-        and "confidence" in input_obj
+        hasattr(input_obj, "type") 
+        and input_obj.type == "tool_calls"
+        and hasattr(input_obj, "tool_calls")
+        and len(input_obj.tool_calls) > 0
     )
 
 
