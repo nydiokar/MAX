@@ -1,50 +1,48 @@
 from enum import Enum
 from typing import Dict, Any, Optional, List, Set
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from MAX.types.workflow_types import WorkflowState
+from .base_types import AgentResponse, MessageType
 
-class CollaborationRole(Enum):
-    COORDINATOR = "coordinator"  # Manages collaboration and integrates results
-    CONTRIBUTOR = "contributor"  # Works on assigned subtasks
-    VALIDATOR = "validator"      # Validates intermediate results
-    OBSERVER = "observer"       # Monitors progress without direct contribution
+class CollaborationRole(str, Enum):
+    INITIATOR = "initiator"
+    PARTICIPANT = "participant"
+    OBSERVER = "observer"
 
-class CollaborationStatus(Enum):
+class CollaborationStatus(str, Enum):
     PENDING = "pending"
     IN_PROGRESS = "in_progress"
-    AWAITING_INPUTS = "awaiting_inputs"
-    INTEGRATING = "integrating"
-    VALIDATING = "validating"
     COMPLETED = "completed"
     FAILED = "failed"
 
 @dataclass
 class SubTask:
-    id: str
+    """Represents a subtask in a collaboration"""
+    task_id: str
     parent_task_id: str
-    assigned_agent: str
     description: str
-    dependencies: Set[str]  # IDs of subtasks this depends on
-    status: str
-    created_at: datetime
+    assigned_agent: str
+    status: str = "pending"
+    priority: int = 1
+    dependencies: Set[str] = field(default_factory=set)
+    completion_criteria: Optional[Dict[str, Any]] = None
+    result: Optional[AgentResponse] = None
+    created_at: datetime = datetime.now()
     completed_at: Optional[datetime] = None
-    result: Optional[Dict[str, Any]] = None
-    error: Optional[str] = None
+    updated_at: Optional[datetime] = None
+    metadata: Optional[Dict[str, Any]] = None
 
 @dataclass
 class CollaborationContext:
-    id: str
-    workflow_state: WorkflowState
-    coordinator_agent: str
-    contributors: Dict[str, List[str]]  # Agent ID -> List of assigned subtask IDs
-    validators: List[str]  # List of validator agent IDs
-    status: CollaborationStatus
-    subtasks: Dict[str, SubTask]
-    shared_context: Dict[str, Any]  # Shared data between agents
-    progress: float  # Overall progress 0-1
-    created_at: datetime
-    updated_at: datetime
+    """Context for collaboration between agents"""
+    context_id: str
+    initiator: str
+    participants: List[str]
+    subtasks: List[SubTask]
+    status: CollaborationStatus = CollaborationStatus.PENDING
+    created_at: datetime = datetime.now()
+    updated_at: Optional[datetime] = None
     metadata: Optional[Dict[str, Any]] = None
 
 @dataclass
@@ -57,11 +55,12 @@ class AgentCollaborationConfig:
 
 @dataclass
 class CollaborationMessage:
-    from_agent: str
-    to_agent: str
-    message_type: str
-    content: Dict[str, Any]
-    timestamp: datetime
-    subtask_id: Optional[str] = None
-    requires_response: bool = False
-    response_deadline: Optional[datetime] = None
+    """Message exchanged during collaboration"""
+    message_id: str
+    sender: str
+    content: str
+    context_id: str
+    recipient: Optional[str] = None
+    message_type: MessageType = MessageType.TEXT
+    timestamp: datetime = datetime.now()
+    metadata: Optional[Dict[str, Any]] = None

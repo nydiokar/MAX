@@ -1,52 +1,54 @@
 from enum import Enum
 from typing import Dict, Any, Optional, List
 from dataclasses import dataclass
+from datetime import datetime
 
-class WorkflowStage(Enum):
-    MEMORY = "memory"
-    REASONING = "reasoning"
-    EXECUTION = "execution"
-    INTROSPECTION = "introspection"
-
-class IntrospectionScope(Enum):
-    AGENT_PERFORMANCE = "agent_performance"
-    WORKFLOW_EFFECTIVENESS = "workflow_effectiveness"
-    DECISION_QUALITY = "decision_quality"
-    ERROR_ANALYSIS = "error_analysis"
-    INTROSPECTION = "introspection"
-
-class WorkflowStatus(Enum):
-    PENDING = "pending"
-    IN_PROGRESS = "in_progress"
+class WorkflowStage(str, Enum):
+    """Stages in a workflow"""
+    INIT = "init"
+    PLANNING = "planning"
+    EXECUTING = "executing"
+    REVIEWING = "reviewing"
     COMPLETED = "completed"
     FAILED = "failed"
-    INTERRUPTED = "interrupted"
+
+class WorkflowStatus(str, Enum):
+    """Status of a workflow"""
+    ACTIVE = "active"
+    PAUSED = "paused"
+    COMPLETED = "completed"
+    FAILED = "failed"
+
+class IntrospectionScope(str, Enum):
+    """Scope for workflow introspection"""
+    LOCAL = "local"
+    GLOBAL = "global"
+    TEAM = "team"
 
 @dataclass
 class WorkflowState:
+    """Current state of a workflow"""
+    workflow_id: str
     stage: WorkflowStage
     status: WorkflowStatus
-    current_agent: Optional[str] = None
-    memory_context: Dict[str, Any] = None
-    reasoning_result: Dict[str, Any] = None
-    execution_result: Dict[str, Any] = None
-    introspection_data: Dict[str, Any] = None
-    error_details: Optional[str] = None
-    performance_metrics: Dict[str, float] = None
-    improvement_suggestions: List[str] = None
-    
+    metadata: Dict[str, Any]
+    created_at: datetime = datetime.now()
+    updated_at: Optional[datetime] = None
+
 @dataclass
 class WorkflowTransition:
-    from_stage: WorkflowStage
-    to_stage: WorkflowStage
-    validation_result: bool
-    validation_message: Optional[str] = None
+    """Transition between workflow states"""
+    from_state: WorkflowState
+    to_state: WorkflowState
+    trigger: str
+    timestamp: datetime = datetime.now()
+    metadata: Optional[Dict[str, Any]] = None
 
 @dataclass
 class WorkflowContext:
-    session_id: str
-    user_id: str
-    initial_input: str
+    """Context for workflow execution"""
+    workflow_id: str
     current_state: WorkflowState
-    history: List[WorkflowTransition] = None
-    metadata: Dict[str, Any] = None
+    transitions: List[WorkflowTransition]
+    scope: IntrospectionScope = IntrospectionScope.LOCAL
+    metadata: Optional[Dict[str, Any]] = None

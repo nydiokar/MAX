@@ -1,8 +1,9 @@
-from typing import Any, Optional, Callable, get_type_hints, Union
+from typing import Any, Optional, Callable, get_type_hints, Union, Dict, List
 import inspect
 from functools import wraps
 import re
 from dataclasses import dataclass
+from datetime import datetime
 from MAX.types import AgentProviderType, ConversationMessage, ParticipantRole
 
 @dataclass
@@ -31,35 +32,36 @@ class AgentToolResult:
             }
         }
 
+@dataclass
 class AgentTool:
-    def __init__(self,
-                name: str,
-                description: Optional[str] = None,
-                properties: Optional[dict[str, dict[str, Any]]] = None,
-                required: Optional[list[str]] = None,
-                func: Optional[Callable] = None,
-                enum_values: Optional[dict[str, list]] = None):
+    """Tool definition for agents"""
+    name: str
+    description: str
+    provider: AgentProviderType
+    function: Callable
+    parameters: Dict[str, Any]
+    required: List[str]
+    metadata: Optional[Dict[str, Any]] = None
 
-        self.name = name
+    def __post_init__(self):
         # Extract docstring if description not provided
-        if description is None:
-            docstring = inspect.getdoc(func)
+        if self.description is None:
+            docstring = inspect.getdoc(self.function)
             if docstring:
                 # Get the first paragraph of the docstring (before any parameter descriptions)
                 self.func_description = docstring.split('\n\n')[0].strip()
             else:
-                self.func_description = f"Function to {name}"
+                self.func_description = f"Function to {self.name}"
         else:
-            self.func_description = description
-        self.enum_values = enum_values or {}
+            self.func_description = self.description
 
-        if not func:
+        if not self.function:
             raise ValueError("Function must be provided")
 
         # Extract properties from the function if not passed
-        self.properties = properties or self._extract_properties(func)
-        self.required = required or list(self.properties.keys())
-        self.func = self._wrap_function(func)
+        self.properties = self._extract_properties(self.function)
+        self.required = self.required or list(self.properties.keys())
+        self.func = self._wrap_function(self.function)
 
         # Add enum values to properties if they exist
         for prop_name, enum_vals in self.enum_values.items():
@@ -152,8 +154,21 @@ class AgentTool:
         }
 
 class AgentTools:
-    def __init__(self, tools:list[AgentTool]):
-        self.tools:list[AgentTool] = tools
+    """Collection of tools available to agents"""
+    def __init__(self):
+        self.tools: Dict[str, AgentTool] = {}
+
+    def register(self, tool: AgentTool) -> None:
+        """Register a new tool"""
+        self.tools[tool.name] = tool
+
+    def get(self, name: str) -> Optional[AgentTool]:
+        """Get a tool by name"""
+        return self.tools.get(name)
+
+    def list_tools(self) -> List[str]:
+        """List all available tool names"""
+        return list(self.tools.keys())
 
     async def tool_handler(self, provider_type, response: Any, _conversation: list[dict[str, Any]]) -> Any:
         if not response.content:
@@ -224,17 +239,17 @@ class AgentTools:
 
     def _process_tool(self, tool_name, input_data):
         try:
-            tool = next(tool for tool in self.tools if tool.name == tool_name)
+            tool = next(tool for tool in self.tools.values() if tool.name == tool_name)
             return tool.func(**input_data)
         except StopIteration:
             return (f"Tool '{tool_name}' not found")
 
     def to_claude_format(self) -> list[dict[str, Any]]:
         """Convert all tools to Claude format"""
-        return [tool.to_claude_format() for tool in self.tools]
+        return [tool.to_claude_format() for tool in self.tools.values()]
 
     def to_bedrock_format(self) -> list[dict[str, Any]]:
         """Convert all tools to Bedrock format"""
-        return [tool.to_bedrock_format() for tool in self.tools]
+        return [tool.to_bedrock_format() for tool in self.tools.values()]
 
 

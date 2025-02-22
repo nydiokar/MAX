@@ -6,7 +6,7 @@ from .exceptions import LLMRateLimitError, LLMProviderError
 
 T = TypeVar("T")
 
-logger = Logger.getLogger(__name__)
+logger = Logger.get_logger(__name__)
 
 
 def async_retry_with_backoff(

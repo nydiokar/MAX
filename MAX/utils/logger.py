@@ -1,7 +1,8 @@
 from typing import List, Optional, Dict, Any
 import json
 import logging
-from MAX.types import ConversationMessage, OrchestratorConfig
+from MAX.types import ConversationMessage
+from MAX.config.orchestrator_config import OrchestratorConfig
 
 logging.basicConfig(level=logging.INFO)
 
@@ -21,19 +22,30 @@ class Logger:
         logger: Optional[logging.Logger] = None,
     ):
         if not hasattr(self, "initialized"):
-            Logger._logger = logger or logging.getLogger(__name__)
+            Logger._logger = logger or logging.getLogger("MAX")
             self.initialized = True
         self.config: OrchestratorConfig = config or OrchestratorConfig()
 
     @classmethod
-    def get_logger(cls):
+    def get_logger(cls, name=None):
         if cls._logger is None:
-            cls._logger = logging.getLogger(__name__)
+            cls._logger = logging.getLogger(name if name else "MAX")
+            
+            if not cls._logger.handlers:
+                handler = logging.StreamHandler()
+                formatter = logging.Formatter(
+                    '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+                )
+                handler.setFormatter(formatter)
+                cls._logger.addHandler(handler)
+                cls._logger.setLevel(logging.INFO)
+                
         return cls._logger
 
     @classmethod
-    def set_logger(cls, logger: Any) -> None:
-        cls._logger = logger
+    def set_level(cls, level):
+        logger = cls.get_logger()
+        logger.setLevel(level)
 
     @classmethod
     def info(cls, message: str, *args: Any) -> None:

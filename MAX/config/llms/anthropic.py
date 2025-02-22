@@ -1,15 +1,10 @@
-from dataclasses import dataclass, field
-from typing import Optional, List
+from dataclasses import dataclass
 from MAX.config.llms.base import BaseLlmConfig
-
+from MAX.config.models import AnthropicModels
 
 @dataclass
 class AnthropicConfig(BaseLlmConfig):
-    """Anthropic-specific LLM configuration"""
-
-    api_key: Optional[str] = None
-    streaming: bool = False
-    use_async: bool = True
-    model_id: str = "claude-3-5-sonnet-20240620"
-    max_retries: int = 3
-    stop_sequences: List[str] = field(default_factory=list)
+    """Anthropic-specific configuration"""
+    model: str = AnthropicModels.HAIKU
+    max_tokens: int = 4096  # Anthropic-specific default
+    api_base_url: str = "https://api.anthropic.com/v1"

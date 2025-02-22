@@ -1,7 +1,12 @@
 from typing import Dict, Any, Optional
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from MAX.retrievers import Retriever
 from pydantic import field_validator
+from MAX.config.llms.base import ResourceConfig, create_resource_config
+from MAX.storage import ChatStorage
+from MAX.managers import MemorySystem
+from MAX.config.models import AnthropicModels
+import os
 
 
 @dataclass
@@ -66,3 +71,26 @@ class AnthropicAgentOptions(AgentOptions):
             save_chat=self.save_chat,
             callbacks=self.callbacks,
         )
+
+
+@dataclass
+class RecursiveThinkerOptions(AgentOptions):
+    max_recursion_depth: int = 3
+    min_confidence_threshold: float = 0.7
+    model_id: str = AnthropicModels.HAIKU
+    temperature: float = 0.7
+    max_tokens: int = 4096
+    streaming: bool = True
+    storage: Optional[ChatStorage] = None
+    memory_system: Optional[MemorySystem] = None
+    resources: ResourceConfig = field(default_factory=lambda: ResourceConfig(local_only=False))
+    api_key: Optional[str] = field(default_factory=lambda: os.getenv("ANTHROPIC_API_KEY"), repr=False)
+
+    def __post_init__(self):
+        if not self.name:
+            self.name = "RecursiveThinker"
+        if not self.description:
+            self.description = "A recursive thinking agent powered by Claude 3"
+
+    def __str__(self) -> str:
+        return f"RecursiveThinkerOptions(model_id={self.model_id})"

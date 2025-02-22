@@ -1,6 +1,7 @@
 # base_llm.py
 from dataclasses import dataclass, field
 from typing import Optional
+from MAX.config.models import AnthropicModels
 
 
 @dataclass
@@ -30,27 +31,19 @@ def create_resource_config() -> ResourceConfig:
 
 @dataclass
 class BaseLlmConfig:
-    """
-    Base configuration for all LLM providers. Intended to be extended by provider-specific configs.
-
-    Attributes:
-        model (Optional[str]): The model name or ID to use.
-        temperature (float): Sampling temperature.
-        max_tokens (int): Maximum tokens to generate in one call.
-        top_p (float): Top-p (nucleus) sampling.
-        resources (ResourceConfig): Resource management details.
-        api_base_url (Optional[str]): API base URL if the LLM provider requires it.
-        auto_pull_models (bool): Whether to automatically pull models if not found locally.
-        fallback_model (Optional[str]): Name of a fallback model if primary fails.
-    """
-
-    model: Optional[str] = None
+    """Base configuration for all LLM providers"""
+    model: str = ""
     temperature: float = 0.7
-    max_tokens: int = 2000
-    top_p: float = 1.0
-    resources: ResourceConfig = field(default_factory=create_resource_config)
-
-    # Additional optional fields often needed by remote or local providers
+    max_tokens: int = 1024
+    streaming: bool = False
+    resources: Optional[ResourceConfig] = None
+    api_key: Optional[str] = None
     api_base_url: Optional[str] = None
-    auto_pull_models: bool = False
-    fallback_model: Optional[str] = None
+
+    def __str__(self) -> str:
+        """Safe string representation that hides API key"""
+        return f"LLMConfig(model={self.model}, api_key=[REDACTED])"
+
+    def __repr__(self) -> str:
+        """Safe repr that hides API key"""
+        return self.__str__()

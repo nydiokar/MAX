@@ -2,12 +2,11 @@ import asyncio
 from typing import Dict, Any, AsyncIterable, Optional, Union, List
 from dataclasses import dataclass, fields, asdict, replace
 import time
-from MAX.types.workflow_types import WorkflowStage, WorkflowContext
+from MAX.types.workflow_types import WorkflowStage
 from MAX.utils.logger import Logger
-from MAX.types import (
+from MAX.types.base_types import (
     ConversationMessage,
     ParticipantRole,
-    OrchestratorConfig,
     AgentMessage,
     MessageType,
 )
@@ -23,11 +22,13 @@ from MAX.agents import (
     AgentProcessingResult,
     TaskExpertAgent,
     TaskExpertOptions,
+    SupervisorAgent,
+    SupervisorAgentOptions,
 )
 from MAX.storage import ChatStorage, InMemoryChatStorage
 from MAX.config.database_config import DatabaseConfig
 from MAX.managers.system_state_manager import StateManager
-from MAX.managers.workflow_manager import WorkflowManager
+from MAX.config.orchestrator_config import OrchestratorConfig
 
 @dataclass
 class MultiAgentOrchestrator:
@@ -42,9 +43,20 @@ class MultiAgentOrchestrator:
         # Initialize database configuration
         self.db_config = DatabaseConfig()
 
-        # Initialize managers
+        # Initialize managers and supervisor
         self.state_manager = StateManager(self.db_config)
-        self.workflow_manager = WorkflowManager()
+        self.supervisor = SupervisorAgent(
+            options=SupervisorAgentOptions(
+                lead_agent=TaskExpertAgent(
+                    options=TaskExpertOptions(
+                        name="SUPERVISOR",
+                        streaming=True,
+                        description="Team coordinator and workflow manager"
+                    )
+                ),
+                storage=storage or InMemoryChatStorage()
+            )
+        )
 
         DEFAULT_CONFIG = OrchestratorConfig()
         ################# CREATE CLASSIFIER AND CHECK THE CODE BELOW IT - TaskExpertOptions seems suspicious  ##################
@@ -172,14 +184,6 @@ class MultiAgentOrchestrator:
         self.execution_times.clear()
 
         try:
-            # Create or get workflow context
-            workflow = await self.workflow_manager.create_workflow(
-                session_id=session_id,
-                user_id=user_id,
-                initial_input=user_input,
-                metadata=additional_params
-            )
-
             # Track conversation state
             await self.state_manager.track_conversation_state(
                 user_id=user_id,
@@ -192,10 +196,21 @@ class MultiAgentOrchestrator:
 
             # Memory Stage: Fetch context
             chat_history = await self.storage.fetch_all_chats(user_id, session_id) or []
-            await self.workflow_manager.transition_stage(
-                session_id,
-                WorkflowStage.MEMORY,
-                {"chat_history": chat_history}
+            
+            # Activate memory team through supervisor
+            await self.supervisor.activate_team(
+                team_type="MEMORY",
+                task_description=user_input,
+                workflow_stage=WorkflowStage.MEMORY.value
+            )
+            
+            # Send memory stage data to team
+            await self.supervisor.send_team_message(
+                content=str({
+                    "user_input": user_input,
+                    "chat_history": [msg.content[0].get('text', '') for msg in chat_history],
+                    "stage": WorkflowStage.MEMORY.value
+                })
             )
 
             # Reasoning Stage: Classify intent and select agent
@@ -209,34 +224,39 @@ class MultiAgentOrchestrator:
             if self.config.LOG_CLASSIFIER_OUTPUT:
                 self.print_intent(user_input, classifier_result)
 
-            # Transition to reasoning stage
-            await self.workflow_manager.transition_stage(
-                session_id,
-                WorkflowStage.REASONING,
-                {
+            # Activate reasoning team through supervisor
+            await self.supervisor.activate_team(
+                team_type="REASONING",
+                task_description=user_input,
+                workflow_stage=WorkflowStage.REASONING.value
+            )
+
+            # Send reasoning stage data to team
+            await self.supervisor.send_team_message(
+                content=str({
                     "intents": classifier_result.intents,
                     "selected_agent": classifier_result.selected_agent.name if classifier_result.selected_agent else None,
-                    "confidence": classifier_result.confidence
-                }
+                    "confidence": classifier_result.confidence,
+                    "stage": WorkflowStage.REASONING.value
+                })
             )
 
             # Handle agent selection failures
             if not classifier_result.selected_agent:
-                await self._handle_agent_selection_failure(
+                return await self._handle_agent_selection_failure(
                     classifier_result, 
-                    workflow,
                     user_input,
                     user_id,
                     session_id,
                     additional_params
                 )
-                return
                 
             # Validate agent before execution
             if not await self._validate_agent(classifier_result.selected_agent):
-                await self.workflow_manager.mark_workflow_failed(
-                    session_id,
-                    f"Agent {classifier_result.selected_agent.name} failed validation"
+                await self.supervisor.update_task_status(
+                    subtask_id=session_id,  # Using session_id as task identifier
+                    status="failed",
+                    result={"reason": f"Agent {classifier_result.selected_agent.name} failed validation"}
                 )
                 self.logger.error(f"Selected agent {classifier_result.selected_agent.name} failed validation")
                 return AgentResponse(
@@ -297,6 +317,29 @@ class MultiAgentOrchestrator:
                         session_id,
                         classifier_result.selected_agent,
                     )
+
+                # Activate execution team and send results
+                await self.supervisor.activate_team(
+                    team_type="EXECUTION",
+                    task_description=user_input,
+                    workflow_stage=WorkflowStage.EXECUTION.value
+                )
+                
+                # Send execution results to team
+                await self.supervisor.send_team_message(
+                    content=str({
+                        "result": agent_response.content[0].get('text', '') if isinstance(agent_response, ConversationMessage) else str(agent_response),
+                        "agent": classifier_result.selected_agent.name,
+                        "stage": WorkflowStage.EXECUTION.value
+                    })
+                )
+
+                # Mark task as completed
+                await self.supervisor.update_task_status(
+                    subtask_id=session_id,
+                    status="completed",
+                    result={"response": agent_response}
+                )
 
                 return AgentResponse(
                     metadata=metadata,
@@ -418,7 +461,6 @@ class MultiAgentOrchestrator:
     async def _handle_agent_selection_failure(
         self,
         classifier_result: ClassifierResult,
-        workflow: WorkflowContext, 
         user_input: str,
         user_id: str,
         session_id: str,
@@ -433,39 +475,50 @@ class MultiAgentOrchestrator:
                 classifier_result.confidence = 0.7  # Conservative confidence for fallback
                 self.logger.info(f"Found alternate agent {best_agent.name} based on intents")
 
-                # Update workflow state with fallback selection
-                await self.workflow_manager.transition_stage(
-                    session_id,
-                    WorkflowStage.REASONING,
-                    {
+                # Update team with fallback selection
+                await self.supervisor.send_team_message(
+                    content=str({
                         "fallback_agent": best_agent.name,
                         "fallback_reason": "Intent-based fallback selection",
-                        "confidence": 0.7
-                    }
+                        "confidence": 0.7,
+                        "stage": WorkflowStage.REASONING.value
+                    })
                 )
-                return True
+                return await self.dispatch_to_agent({
+                    "user_input": user_input,
+                    "user_id": user_id,
+                    "session_id": session_id,
+                    "classifier_result": classifier_result,
+                    "additional_params": additional_params,
+                })
 
         # Use default agent as last resort if configured
         if self.config.USE_DEFAULT_AGENT_IF_NONE_IDENTIFIED:
             classifier_result = self.get_fallback_result()
             self.logger.info(f"Using default agent. Detected intents: {classifier_result.intents}")
             
-            # Update workflow with default agent selection
-            await self.workflow_manager.transition_stage(
-                session_id,
-                WorkflowStage.REASONING,
-                {
+            # Update team with default agent selection
+            await self.supervisor.send_team_message(
+                content=str({
                     "fallback_agent": "DEFAULT",
                     "fallback_reason": "Using default agent",
-                    "confidence": 0.5
-                }
+                    "confidence": 0.5,
+                    "stage": WorkflowStage.REASONING.value
+                })
             )
-            return True
+            return await self.dispatch_to_agent({
+                "user_input": user_input,
+                "user_id": user_id,
+                "session_id": session_id,
+                "classifier_result": classifier_result,
+                "additional_params": additional_params,
+            })
 
         # No suitable agent found
-        await self.workflow_manager.mark_workflow_failed(
-            session_id,
-            "No suitable agent found and no default agent configured"
+        await self.supervisor.update_task_status(
+            subtask_id=session_id,
+            status="failed",
+            result={"reason": "No suitable agent found and no default agent configured"}
         )
 
         return AgentResponse(
@@ -538,7 +591,7 @@ class MultiAgentOrchestrator:
 
     def _find_best_agent_for_intents(self, intents: List[str]) -> Optional[Agent]:
         """
-        Find best matching agent based on detected intents.
+        Find best matching agent based on detected intents and query analysis.
         Used as an intelligent fallback when primary agent selection fails.
         """
         best_score = 0
@@ -546,27 +599,86 @@ class MultiAgentOrchestrator:
 
         for agent in self.agents.values():
             score = 0
+            
+            # Check agent availability first
+            if not self._is_agent_available(agent):
+                continue
+
+            # Check capabilities match
             if hasattr(agent, 'capabilities'):
-                # Check for direct intent matches in capabilities
                 matching_caps = [cap for cap in agent.capabilities if any(i in cap for i in intents)]
                 if matching_caps:
                     score += len(matching_caps) / len(agent.capabilities)
 
+            # Check specializations match
             if hasattr(agent, 'specializations'):
-                # Check for specialization matches
                 matching_specs = [spec for spec in agent.specializations if any(i in spec for i in intents)]
                 if matching_specs:
                     score += len(matching_specs)
 
-            # Consider agent's historical success with similar intents
+            # Consider agent's historical performance
             if hasattr(agent, 'success_rate'):
                 score *= (1 + agent.success_rate)
+
+            # Consider current workload
+            if hasattr(agent, 'current_tasks'):
+                workload_penalty = len(agent.current_tasks) * 0.1
+                score = max(0, score - workload_penalty)
+
+            # Consider agent's response time history
+            if hasattr(agent, 'avg_response_time'):
+                time_score = 1.0 / (1.0 + agent.avg_response_time)  # Normalize to 0-1
+                score *= (1 + time_score)
+
+            # Consider agent's error rate
+            if hasattr(agent, 'error_rate'):
+                error_penalty = agent.error_rate * 0.5
+                score = max(0, score - error_penalty)
 
             if score > best_score:
                 best_score = score
                 best_agent = agent
 
-        return best_agent if best_score > 0.3 else None  # Require minimum match quality
+        # Require higher minimum match quality
+        return best_agent if best_score > 0.4 else None
+
+    def _is_agent_available(self, agent: Agent) -> bool:
+        """
+        Check if an agent is currently available and healthy.
+        """
+        if not agent:
+            return False
+
+        try:
+            # Check if agent is initialized
+            if hasattr(agent, 'is_initialized') and not agent.is_initialized:
+                return False
+
+            # Check if agent is at max capacity
+            if hasattr(agent, 'current_tasks'):
+                if len(agent.current_tasks) >= agent.max_concurrent_tasks:
+                    return False
+
+            # Check agent's health status
+            if hasattr(agent, 'health_status'):
+                if agent.health_status != 'healthy':
+                    return False
+
+            # Check if agent is in maintenance mode
+            if hasattr(agent, 'maintenance_mode'):
+                if agent.maintenance_mode:
+                    return False
+
+            # Check if agent has required resources
+            if hasattr(agent, 'check_resources'):
+                if not agent.check_resources():
+                    return False
+
+            return True
+
+        except Exception as e:
+            Logger.error(f"Error checking agent availability: {str(e)}")
+            return False
 
     async def _validate_agent(self, agent: Agent) -> bool:
         """

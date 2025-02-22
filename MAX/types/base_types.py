@@ -36,66 +36,81 @@ class RequestMetadata(BaseModel):
     error_type: Optional[str] = None
 
 
-class ParticipantRole(Enum):
-    ASSISTANT = "assistant"
+class ParticipantRole(str, Enum):
+    """Roles for conversation participants"""
     USER = "user"
+    ASSISTANT = "assistant"
     SYSTEM = "system"
-    STATE = "state"
+
+
+class MessageType(str, Enum):
+    """Types of messages in the system"""
+    TEXT = "text"
+    IMAGE = "image"
+    AUDIO = "audio"
+    VIDEO = "video"
+    FILE = "file"
 
 
 @dataclass
 class AgentResponse:
-    """
-    Represents a response from an agent.
-    """
-
-    metadata: Dict[str, Any]
-    output: Any
-    streaming: bool = False
-
-
-class ConversationMessage(BaseModel):
-    """
-    Represents a single message in a conversation.
-    """
-
-    role: ParticipantRole
+    """Standard response format for agents"""
     content: Union[str, List[Dict[str, str]]]
+    confidence: float
+    metadata: Optional[Dict[str, Any]] = None
+    agent_id: Optional[str] = None
     timestamp: Optional[datetime] = None
-    metadata: Dict[str, Any] = {}
+    message_type: MessageType = MessageType.TEXT
+    status: str = "success"
+    error: Optional[str] = None
 
 
-class TimestampedMessage(ConversationMessage):
-    timestamp: datetime
-
-    class Config:
-        arbitrary_types_allowed = True
-
-
-TemplateVariables = Dict[str, Union[str, List[str]]]
+MessageContent = Union[str, List[Dict[str, str]]]
 
 
 @dataclass
-class OrchestratorConfig:
-    """
-    Configuration for the orchestrator (routing, logging, etc.).
-    Adjust fields as necessary.
-    """
+class BaseMessage:
+    """Base message type for the system"""
+    role: ParticipantRole
+    content: MessageContent
+    metadata: Optional[Dict[str, Any]] = None
 
-    LOG_AGENT_CHAT: bool = False
-    LOG_CLASSIFIER_CHAT: bool = False
-    LOG_CLASSIFIER_RAW_OUTPUT: bool = False
-    LOG_CLASSIFIER_OUTPUT: bool = False
-    LOG_EXECUTION_TIMES: bool = False
-    MAX_RETRIES: int = 3
-    USE_DEFAULT_AGENT_IF_NONE_IDENTIFIED: bool = True
-    CLASSIFICATION_ERROR_MESSAGE: Optional[str] = None
-    NO_SELECTED_AGENT_MESSAGE: str = (
-        "I'm sorry, I couldn't determine how to handle your request.\n"
-        "Could you please rephrase it?"
-    )
-    GENERAL_ROUTING_ERROR_MSG_MESSAGE: Optional[str] = None
-    MAX_MESSAGE_PAIRS_PER_AGENT: int = 100
+
+@dataclass
+class ConversationMessage(BaseMessage):
+    """Standard message format for conversations"""
+    message_type: MessageType = MessageType.TEXT
+
+
+@dataclass
+class AgentMessage:
+    """Message specific to agent communications"""
+    agent_id: str
+    role: ParticipantRole
+    content: MessageContent
+    confidence: float = 0.0
+    timestamp: Optional[datetime] = None
+    metadata: Optional[Dict[str, Any]] = None
+    message_type: MessageType = MessageType.TEXT
+
+
+@dataclass
+class TimestampedMessage:
+    """Message with timestamp information"""
+    message: ConversationMessage
+    timestamp: datetime = datetime.now()
+    metadata: Optional[Dict[str, Any]] = None
+
+    @property
+    def role(self) -> ParticipantRole:
+        return self.message.role
+
+    @property
+    def content(self) -> MessageContent:
+        return self.message.content
+
+
+TemplateVariables = Dict[str, Union[str, List[str]]]
 
 
 @dataclass
@@ -188,3 +203,40 @@ class AgentConfig(BaseModel):
     tools: AgentToolConfig
     capabilities: List[str] = []
     max_concurrent_tasks: int = 1
+
+
+@dataclass
+class ResourceConfig:
+    """Configuration for resource management"""
+    max_parallel_calls: int = 5
+    cost_per_token: float = 0.0
+    priority: int = 1
+    local_only: bool = False
+
+
+class AgentProviderType(str, Enum):
+    """Types of agent providers"""
+    ANTHROPIC = "anthropic"
+    OPENAI = "openai"
+    CUSTOM = "custom"
+    SYSTEM = "system"
+
+
+class AgentTypes(str, Enum):
+    """Types of agents"""
+    RECURSIVE_THINKER = "recursive_thinker"
+    TASK_EXECUTOR = "task_executor"
+    CONVERSATION = "conversation"
+    SYSTEM = "system"
+
+
+@dataclass
+class AgentMetadata:
+    """Metadata for agents"""
+    provider: AgentProviderType
+    type: AgentTypes
+    capabilities: List[str]
+    model_id: str
+    version: str
+    created_at: str
+    metadata: Optional[Dict[str, Any]] = None

@@ -1,35 +1,80 @@
-"""Module for importing types."""
+"""
+Types module for MAX system.
+Import all types from their respective modules and expose them at package level.
+"""
 
+# Base types
 from .base_types import (
-    ConversationMessage,
+    MessageType,
     ParticipantRole,
+    BaseMessage,
+    ConversationMessage,
+    AgentMessage,
     TimestampedMessage,
-    RequestMetadata,
-    ToolInput,
+    MessageContent,
+    AgentProviderType,
     AgentTypes,
-    TemplateVariables,
-    OrchestratorConfig,
-    ProcessedContent,
-    DiscordAttachment,
-    DiscordAdapterConfig,
-    PlatformAdapter,
-    AgentResponse,
-    DatabaseConfig,
+    AgentMetadata
 )
 
+# Memory types
+from .memory_types import (
+    DataCategory,
+    DataPriority,
+    MemoryEntry,
+    ConversationMemory,
+    MemoryData
+)
+
+# Collaboration types
+from .collaboration_types import (
+    SubTask,
+    CollaborationRole,
+    CollaborationStatus,
+    CollaborationContext,
+    CollaborationMessage
+)
+
+# Collaboration management types
+from .collaboration_management_types import (
+    TaskDivisionPlan,
+    AggregationStrategy,
+    ResponseType
+)
+from MAX.config.llms.base import ResourceConfig
+
 __all__ = [
-    "ConversationMessage",
+    # Base types
+    "MessageType",
     "ParticipantRole",
+    "BaseMessage",
+    "ConversationMessage",
+    "AgentMessage",
     "TimestampedMessage",
-    "RequestMetadata",
-    "ToolInput",
+    "MessageContent",
+    
+    # Memory types
+    "DataCategory",
+    "DataPriority",
+    "MemoryEntry",
+    "ConversationMemory",
+    "MemoryData",
+    
+    # Collaboration types
+    "SubTask",
+    "CollaborationRole",
+    "CollaborationStatus",
+    "CollaborationContext",
+    "CollaborationMessage",
+    
+    # Collaboration management types
+    "TaskDivisionPlan",
+    "AggregationStrategy",
+    "ResponseType",
+    
+    # Agent types
+    "AgentProviderType",
     "AgentTypes",
-    "TemplateVariables",
-    "OrchestratorConfig",
-    "ProcessedContent",
-    "DiscordAttachment",
-    "DiscordAdapterConfig",
-    "PlatformAdapter",
-    "AgentResponse",
-    "DatabaseConfig",
+    "AgentMetadata",
+    "ResourceConfig"
 ]

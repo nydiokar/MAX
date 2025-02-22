@@ -1,205 +1,186 @@
 import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import Mock, patch
 from MAX.orchestrator import MultiAgentOrchestrator
-from MAX.classifiers import ClassifierResult, AnthropicClassifier, AnthropicClassifierOptions
-from MAX.agents import Agent, AgentResponse, AnthropicAgent, AnthropicAgentOptions
-from MAX.types import ConversationMessage, ParticipantRole, AgentTypes
+from MAX.config.orchestrator_config import OrchestratorConfig
+from MAX.types import ConversationMessage, ParticipantRole
+from MAX.types.workflow_types import WorkflowStage
+from MAX.classifiers import ClassifierResult
+from MAX.agents import Agent, AgentResponse
+from MAX.storage import InMemoryChatStorage
 
-class TestMultiAgentOrchestrator:
-    @pytest.fixture
-    def task_expert_agent(self):
-        """Create a real AnthropicAgent for task handling."""
-        agent = AnthropicAgent(
-            options=AnthropicAgentOptions(
-                api_key="test-key",
-                name="Task Expert",
-                description="A specialized agent for task analysis and execution",
-                agent_type=AgentTypes.TASK_EXPERT.value,
-                streaming=False,
-            )
+@pytest.fixture
+def mock_classifier():
+    mock = Mock()
+    mock.classify = Mock()
+    return mock
+
+@pytest.fixture
+def mock_storage():
+    return InMemoryChatStorage()
+
+@pytest.fixture
+def mock_agent():
+    mock = Mock(spec=Agent)
+    mock.name = "MOCK_AGENT"
+    mock.id = "mock_agent"
+    mock.description = "Mock agent for testing"
+    mock.is_streaming_enabled = Mock(return_value=False)
+    return mock
+
+@pytest.fixture
+def orchestrator(mock_classifier, mock_storage, mock_agent):
+    orchestrator = MultiAgentOrchestrator(
+        options=OrchestratorConfig(),
+        storage=mock_storage,
+        classifier=mock_classifier
+    )
+    orchestrator.add_agent(mock_agent)
+    return orchestrator
+
+@pytest.mark.asyncio
+async def test_agent_selection_with_classifier(orchestrator, mock_classifier, mock_agent):
+    """Test agent selection using intent classification"""
+    # Setup classifier response
+    mock_classifier.classify.return_value = ClassifierResult(
+        selected_agent=mock_agent,
+        confidence=0.9,
+        intents=["test_intent"]
+    )
+
+    # Test selection
+    result = await orchestrator.route_request(
+        user_input="test request",
+        user_id="test_user",
+        session_id="test_session"
+    )
+
+    assert isinstance(result, AgentResponse)
+    assert mock_classifier.classify.called
+    assert result.metadata.agent_id == mock_agent.id
+
+@pytest.mark.asyncio
+async def test_workflow_stage_progression(orchestrator, mock_classifier, mock_agent):
+    """Test Memory → Reasoning → Execution workflow progression"""
+    # Setup successful agent selection
+    mock_classifier.classify.return_value = ClassifierResult(
+        selected_agent=mock_agent,
+        confidence=0.9,
+        intents=["test_intent"]
+    )
+
+    # Mock agent response
+    mock_agent.process_request.return_value = ConversationMessage(
+        role=ParticipantRole.ASSISTANT.value,
+        content=[{"text": "test response"}]
+    )
+
+    # Test full workflow
+    result = await orchestrator.route_request(
+        user_input="test workflow request",
+        user_id="test_user",
+        session_id="test_session"
+    )
+
+    # Verify workflow stages were executed
+    supervisor_calls = orchestrator.supervisor.activate_team.call_args_list
+    assert len(supervisor_calls) >= 3  # Memory, Reasoning, Execution stages
+
+    stages = [call[1]["workflow_stage"] for call in supervisor_calls]
+    assert WorkflowStage.MEMORY.value in stages
+    assert WorkflowStage.REASONING.value in stages
+    assert WorkflowStage.EXECUTION.value in stages
+
+@pytest.mark.asyncio
+async def test_agent_fallback_mechanism(orchestrator, mock_classifier):
+    """Test fallback mechanism when primary agent selection fails"""
+    # Setup classifier response with no agent
+    mock_classifier.classify.return_value = ClassifierResult(
+        selected_agent=None,
+        confidence=0,
+        intents=["test_intent"],
+        fallback_reason="No suitable agent found"
+    )
+
+    # Test fallback behavior
+    result = await orchestrator.route_request(
+        user_input="test request",
+        user_id="test_user",
+        session_id="test_session"
+    )
+
+    assert isinstance(result, AgentResponse)
+    assert "NO_SELECTED_AGENT" in result.output.content[0]["text"]
+
+@pytest.mark.asyncio
+async def test_multi_agent_response_handling(orchestrator, mock_classifier):
+    """Test handling of responses from multiple agents"""
+    # Setup mock team response
+    mock_responses = [
+        ConversationMessage(
+            role=ParticipantRole.ASSISTANT.value,
+            content=[{"text": "Response 1"}]
+        ),
+        ConversationMessage(
+            role=ParticipantRole.ASSISTANT.value,
+            content=[{"text": "Response 2"}]
         )
-        # Mock only the process_request method to avoid actual API calls
-        agent.process_request = AsyncMock(
-            return_value=ConversationMessage(
-                role=ParticipantRole.ASSISTANT.value,
-                content="Task expert response"
-            )
-        )
-        return agent
+    ]
 
-    @pytest.fixture
-    def general_agent(self):
-        """Create a real AnthropicAgent for general tasks."""
-        agent = AnthropicAgent(
-            options=AnthropicAgentOptions(
-                api_key="test-key",
-                name="General Assistant",
-                description="A general-purpose assistant for handling various tasks",
-                agent_type=AgentTypes.DEFAULT.value,
-                streaming=False,
-            )
-        )
-        # Mock only the process_request method to avoid actual API calls
-        agent.process_request = AsyncMock(
-            return_value=ConversationMessage(
-                role=ParticipantRole.ASSISTANT.value,
-                content="General assistant response"
-            )
-        )
-        return agent
+    # Mock supervisor aggregation
+    orchestrator.supervisor.aggregate_responses.return_value = {
+        "content": "Aggregated response",
+        "confidence": 0.9
+    }
 
-    @pytest.fixture
-    def test_classifier(self):
-        """Create a real AnthropicClassifier with mocked API calls."""
-        classifier = AnthropicClassifier(
-            options=AnthropicClassifierOptions(
-                api_key="test-key",
-                min_confidence_threshold=0.7
-            )
-        )
-        # Mock the API calls but keep the real classification logic
-        classifier.client = MagicMock()
-        classifier.client.messages.create = AsyncMock()
-        return classifier
+    # Test response handling
+    result = await orchestrator.route_request(
+        user_input="test multi-agent request",
+        user_id="test_user",
+        session_id="test_session"
+    )
 
-    @pytest.fixture
-    def mock_storage(self):
-        storage = MagicMock()
-        storage.fetch_all_chats = AsyncMock(return_value=[])
-        storage.fetch_chat = AsyncMock(return_value=[])
-        storage.save_chat_message = AsyncMock()
-        return storage
+    assert isinstance(result, AgentResponse)
+    assert orchestrator.supervisor.aggregate_responses.called
 
-    @pytest.fixture
-    def orchestrator(self, test_classifier, mock_storage):
-        orchestrator = MultiAgentOrchestrator(
-            classifier=test_classifier,
-            storage=mock_storage
-        )
-        # Disable default agent usage to test proper fallback behavior
-        orchestrator.config.USE_DEFAULT_AGENT_IF_NONE_IDENTIFIED = False
-        return orchestrator
+@pytest.mark.asyncio
+async def test_error_handling_and_recovery(orchestrator, mock_classifier, mock_agent):
+    """Test error handling during agent execution"""
+    # Setup classifier
+    mock_classifier.classify.return_value = ClassifierResult(
+        selected_agent=mock_agent,
+        confidence=0.9
+    )
 
-    @pytest.mark.asyncio
-    async def test_route_request_with_successful_classification(
-        self, orchestrator, task_expert_agent, test_classifier, mock_storage
-    ) -> None:
-        # Setup
-        user_input = "test input"
-        user_id = "test_user"
-        session_id = "test_session"
-        
-        # Setup classifier mock response
-        test_classifier.client.messages.create.return_value = MagicMock(
-            content=[
-                MagicMock(
-                    type="tool_use",
-                    input={
-                        "userinput": "analyze this task",
-                        "primary_agent": {
-                            "name": "Task Expert",
-                            "confidence": 0.9,
-                            "reasoning": "Task analysis request"
-                        },
-                        "fallback_agents": [],
-                        "detected_intents": ["task_analysis"]
-                    }
-                )
-            ]
-        )
-        
-        # Add the agent to the orchestrator
-        orchestrator.add_agent(task_expert_agent)
+    # Make agent raise an error
+    mock_agent.process_request.side_effect = Exception("Test error")
 
-        # Test
-        response = await orchestrator.route_request(user_input, user_id, session_id)
-        
-        # Verify
-        assert isinstance(response, AgentResponse)
-        assert response.metadata.agent_id == task_expert_agent.id
-        assert "task_analysis" in response.metadata.additional_params["detected_intents"]
+    # Test error handling
+    result = await orchestrator.route_request(
+        user_input="test error case",
+        user_id="test_user",
+        session_id="test_session"
+    )
 
-    @pytest.mark.asyncio
-    async def test_route_request_with_fallback_to_general(
-        self, orchestrator, task_expert_agent, general_agent, test_classifier
-    ) -> None:
-        # Setup
-        user_input = "test input"
-        user_id = "test_user"
-        session_id = "test_session"
-        
-        # Add both agents to the orchestrator
-        orchestrator.add_agent(task_expert_agent)
-        orchestrator.add_agent(general_agent)
+    assert isinstance(result, AgentResponse)
+    assert result.metadata.additional_params.get("error_type") is not None
+    assert orchestrator.supervisor.update_task_status.called
 
-        # Setup classifier mock response - simulate low confidence for task expert
-        test_classifier.client.messages.create.return_value = MagicMock(
-            content=[
-                MagicMock(
-                    type="tool_use",
-                    input={
-                        "userinput": "what's the weather like?",
-                        "primary_agent": {
-                            "name": "Task Expert",
-                            "confidence": 0.5,  # Below threshold
-                            "reasoning": "Not a task-related query"
-                        },
-                        "fallback_agents": [
-                            {
-                                "name": "General Assistant",
-                                "confidence": 0.8,
-                                "reasoning": "Can handle general queries"
-                            }
-                        ],
-                        "detected_intents": ["general_query", "weather"]
-                    }
-                )
-            ]
-        )
+@pytest.mark.asyncio
+async def test_conversation_state_management(orchestrator, mock_storage):
+    """Test conversation state management across requests"""
+    # Test state tracking
+    await orchestrator.route_request(
+        user_input="first message",
+        user_id="test_user",
+        session_id="test_session"
+    )
 
-        # Test
-        response = await orchestrator.route_request(user_input, user_id, session_id)
-        
-        # Verify
-        assert isinstance(response, AgentResponse)
-        assert response.metadata.agent_id == general_agent.id
-        assert set(response.metadata.additional_params["detected_intents"].split(",")) == {"general_query", "weather"}
-        assert "failure_reason" in response.metadata.additional_params
+    # Verify state was stored
+    history = await mock_storage.fetch_chat(
+        user_id="test_user",
+        session_id="test_session",
+        agent_id=orchestrator.supervisor.id
+    )
 
-    @pytest.mark.asyncio
-    async def test_route_request_with_no_suitable_agents(
-        self, orchestrator, test_classifier
-    ) -> None:
-        # Setup
-        user_input = "unrecognizable input"
-        user_id = "test_user"
-        session_id = "test_session"
-        
-        # Setup classifier mock response - no suitable agents
-        test_classifier.client.messages.create.return_value = MagicMock(
-            content=[
-                MagicMock(
-                    type="tool_use",
-                    input={
-                        "userinput": "something completely unrecognizable",
-                        "primary_agent": {
-                            "name": "Unknown",
-                            "confidence": 0.1,
-                            "reasoning": "Cannot determine appropriate agent"
-                        },
-                        "fallback_agents": [],
-                        "detected_intents": ["unknown_intent"]
-                    }
-                )
-            ]
-        )
-
-        # Test
-        response = await orchestrator.route_request(user_input, user_id, session_id)
-        
-        # Verify
-        assert isinstance(response, AgentResponse)
-        assert response.metadata.agent_id == "no_agent_selected"
-        assert "classification_failed" in response.metadata.additional_params["error_type"]
-        assert "unknown_intent" in response.metadata.additional_params["detected_intents"]
-        assert "No suitable agent found" in response.metadata.additional_params["failure_reason"]
+    assert len(history) > 0
+    assert history[0].role == ParticipantRole.USER.value

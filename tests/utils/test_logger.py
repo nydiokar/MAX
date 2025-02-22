@@ -1,8 +1,9 @@
 import pytest
 import logging
 from typing import Dict, Any
-from multi_agent_orchestrator.types import ConversationMessage, OrchestratorConfig
-from multi_agent_orchestrator.utils import Logger
+from MAX.types import ConversationMessage
+from MAX.config.orchestrator_config import OrchestratorConfig
+from MAX.utils import Logger
 
 @pytest.fixture
 def logger_instance():

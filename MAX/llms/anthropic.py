@@ -1,6 +1,10 @@
 from typing import Dict, List, Optional
 from anthropic import AsyncAnthropic
-from anthropic.types import APIError
+from anthropic.types import (
+    RateLimitError,
+    AuthenticationError,
+    InvalidRequestError,
+)
 from MAX.llms.base import AsyncLLMBase
 from MAX.config.llms.anthropic import AnthropicConfig
 from MAX.llms.utils.exceptions import (
@@ -8,7 +12,7 @@ from MAX.llms.utils.exceptions import (
     LLMRateLimitError,
     LLMAuthenticationError,
 )
-from MAX.llms.utils import async_retry_with_backoff
+from MAX.llms.utils.utils import async_retry_with_backoff
 import logging
 from MAX.llms.utils.exceptions import LLMConfigError
 
@@ -41,13 +45,12 @@ class AnthropicLLM(AsyncLLMBase):
             logger.debug("Successfully generated response")
             return response.content
 
-        except APIError as e:
-            if "rate_limit" in str(e).lower():
-                raise LLMRateLimitError(str(e), provider="anthropic")
-            elif "unauthorized" in str(e).lower():
-                raise LLMAuthenticationError(str(e), provider="anthropic")
-            else:
-                raise LLMProviderError(str(e), provider="anthropic")
+        except RateLimitError as e:
+            raise LLMRateLimitError(str(e), provider="anthropic")
+        except AuthenticationError as e:
+            raise LLMAuthenticationError(str(e), provider="anthropic")
+        except InvalidRequestError as e:
+            raise LLMProviderError(str(e), provider="anthropic")
         except Exception as e:
             logger.error(f"Unexpected error in Anthropic provider: {str(e)}")
             raise LLMProviderError(str(e), provider="anthropic")

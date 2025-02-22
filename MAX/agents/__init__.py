@@ -12,7 +12,13 @@ from MAX.agents.agent import (
     AgentResponse,
     AgentOptions,
 )
-from MAX.agents.options import BaseAgentOptions
+from MAX.agents.options import (
+    BaseAgentOptions,
+    RecursiveThinkerOptions
+)
+
+# Import the RecursiveThinkerAgent
+from MAX.agents.recursive_thinker import RecursiveThinkerAgent
 
 # Options - import these directly from their modules
 from MAX.agents.task_expert.options import TaskExpertOptions
@@ -28,6 +34,16 @@ try:
     from MAX.llms.ollama import OllamaLLM as OllamaProvider
 except ImportError:
     OllamaProvider = None
+
+try:
+    from MAX.llms.anthropic import AnthropicLLM as AnthropicProvider
+except ImportError:
+    AnthropicProvider = None
+
+try:
+    from MAX.llms.openai import OpenAILLM as OpenAIProvider
+except ImportError:
+    OpenAIProvider = None
 
 if TYPE_CHECKING:
     from MAX.agents.task_expert.task_expert import TaskExpertAgent
@@ -53,13 +69,18 @@ __all__ = [
     # Options
     "BaseAgentOptions",
     "AgentOptions",
+    "RecursiveThinkerOptions",
     "TaskExpertOptions",
+    # Agents
+    "RecursiveThinkerAgent",
     # Interfaces
     "TaskStorage",
     "NotificationService",
     # Model providers
     "LLMProvider",
     "OllamaProvider",
+    "AnthropicProvider",
+    "OpenAIProvider",
     # Expert agents
     "get_task_expert_agent",
 ]

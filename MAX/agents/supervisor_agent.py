@@ -1,19 +1,24 @@
+## DO NOT TRUST THIS CODE 100% - IT IS A WORK IN PROGRESS; tested and some errors - DO NOT DELETE THESE COMMENTS
+## FOCUS ON SINGLE AGENT IDENTIFICATION AND CLASIFICATION - NOT ON TEAM MANAGEMENT - DO NOT DELETE THESE COMMENTS
+## THIS CODE IS A WORK IN PROGRESS AND IS NOT READY FOR PRODUCTION - DO NOT DELETE THESE COMMENTS
+
 from __future__ import annotations
 from typing import TYPE_CHECKING, Optional, Any, AsyncIterable, Union, Dict, List
 from dataclasses import dataclass, field
 import datetime
 import asyncio
 import uuid
+import json
 from MAX.agents import Agent, AgentOptions
 from MAX.agents.teams.team_registry import TeamRegistry, TeamSpec, TeamType, TeamConfiguration
-from MAX.types.workflow_types import WorkflowStage
-from MAX.types.collaboration_types import CollaborationRole
-from MAX.managers.task_division_manager import TaskDivisionManager, TaskDivisionPlan
-from MAX.managers.response_aggregator import (
-    ResponseAggregator,
+from MAX.types import WorkflowStage
+from MAX.types import CollaborationRole
+from MAX.types import (
+    TaskDivisionPlan,
     AgentResponse,
     ResponseType,
-    AggregationStrategy
+    AggregationStrategy,
+    SubTask
 )
 if TYPE_CHECKING:
     from MAX.agents import AnthropicAgent, BedrockLLMAgent
@@ -82,26 +87,24 @@ class SupervisorAgent(Agent):
     DEFAULT_TOOL_MAX_RECURSIONS = 40
 
     def __init__(self, options: SupervisorAgentOptions):
-        options.validate()
-        options.name = options.lead_agent.name
-        options.description = options.lead_agent.description
-        super().__init__(options)
-
-        self.lead_agent: 'Union[AnthropicAgent, BedrockLLMAgent]' = options.lead_agent
-        self.team = options.team
+        # Convert Pydantic model to dict if needed
+        options_dict = options.model_dump()
+        super().__init__(options_dict)
+        
+        self.lead_agent = options.lead_agent
+        self.team = options.team_registry
         self.storage = options.storage or InMemoryChatStorage()
         self.trace = options.trace
         self.user_id = ''
         self.session_id = ''
 
-        # Task management
-        self.task_manager = TaskDivisionManager()
+        # Task and response management
         self.active_task_id: Optional[str] = None
         self.task_status: Dict[str, Any] = {}
-        
-        # Response management
-        self.response_aggregator = ResponseAggregator()
+        self.active_tasks: Dict[str, TaskDivisionPlan] = {}
+        self.response_buffer: Dict[str, List[AgentResponse]] = {}  # task_id -> responses
         self.pending_responses: Dict[str, Dict[str, bool]] = {}  # task_id -> {agent_id -> received}
+        self.aggregation_cache: Dict[str, Dict[str, Any]] = {}  # task_id -> aggregated result
 
         self._configure_supervisor_tools(options.extra_tools)
         self._configure_prompt()
@@ -511,27 +514,66 @@ When communicating with other agents, including the User, please follow these gu
     ) -> str:
         """Create and assign task divisions to team members."""
         try:
-            # Create a new task ID if none exists
             if not self.active_task_id:
                 self.active_task_id = str(uuid.uuid4())
 
-            # Get available agents from team registry or current team
             available_agents = self.team_registry.get_available_agents(
                 CollaborationRole.CONTRIBUTOR
             ) if self.team_registry else self.team
 
-            # Create task division plan
-            plan = await self.task_manager.create_task_division(
+            subtask_descriptions = self._analyze_task_breakpoints(task_description) if task_type == "SEQUENTIAL" else self._analyze_parallel_components(task_description)
+            
+            subtasks = []
+            dependencies = {}
+            current_time = datetime.utcnow()
+            
+            for i, desc in enumerate(subtask_descriptions):
+                subtask_id = str(uuid.uuid4())
+                subtask = SubTask(
+                    task_id=subtask_id,
+                    parent_task_id=self.active_task_id,
+                    description=desc,
+                    assigned_agent="",  # Will be assigned later
+                    status="pending",
+                    priority=complexity,
+                    dependencies=set(),
+                    created_at=current_time
+                )
+                subtasks.append(subtask)
+                
+                if task_type == "SEQUENTIAL" and i > 0:
+                    subtask.dependencies = {subtasks[i-1].task_id}
+                    dependencies[subtask_id] = {subtasks[i-1].task_id}
+            
+            # Calculate assignments based on agent capabilities
+            assignment_map = {}
+            for subtask in subtasks:
+                best_agent = None
+                best_score = -1
+                
+                for agent in available_agents:
+                    score = self._calculate_agent_score(agent, subtask)
+                    if score > best_score:
+                        best_score = score
+                        best_agent = agent
+                
+                if best_agent:
+                    assignment_map[subtask.task_id] = best_agent.id
+            
+            # Create plan
+            plan = TaskDivisionPlan(
                 parent_task_id=self.active_task_id,
-                task_description=task_description,
-                available_agents=available_agents,
-                task_type=task_type,
-                complexity_level=complexity
+                subtasks=subtasks,
+                dependencies=dependencies,
+                estimated_duration=self._estimate_durations(subtasks),
+                assignment_map=assignment_map
             )
-
-            # Log assignments
+            
+            # Store plan
+            self.active_tasks[self.active_task_id] = plan
+            
             assignments_str = "\n".join(
-                f"Subtask {subtask.id}: {subtask.description} -> {plan.assignment_map[subtask.id]}"
+                f"Subtask {subtask.task_id}: {subtask.description} -> {plan.assignment_map.get(subtask.task_id, 'unassigned')}"
                 for subtask in plan.subtasks
             )
             
@@ -540,6 +582,79 @@ When communicating with other agents, including the User, please follow these gu
         except Exception as e:
             Logger.error(f"Error creating task division: {str(e)}")
             return f"Error: {str(e)}"
+
+    def _analyze_task_breakpoints(self, task_description: str) -> List[str]:
+        """Analyze task to find natural sequential breakpoints."""
+        breakpoints = []
+        current_section = []
+        
+        for line in task_description.split('\n'):
+            if any(marker in line.lower() for marker in ['step', 'phase', 'stage']):
+                if current_section:
+                    breakpoints.append('\n'.join(current_section))
+                    current_section = []
+            current_section.append(line)
+            
+        if current_section:
+            breakpoints.append('\n'.join(current_section))
+            
+        return breakpoints if breakpoints else [task_description]
+
+    def _analyze_parallel_components(self, task_description: str) -> List[str]:
+        """Identify independent components that can be executed in parallel."""
+        components = []
+        current_component = []
+        
+        for line in task_description.split('\n'):
+            if any(marker in line.lower() for marker in ['independent', 'parallel', 'concurrent']):
+                if current_component:
+                    components.append('\n'.join(current_component))
+                    current_component = []
+            current_component.append(line)
+            
+        if current_component:
+            components.append('\n'.join(current_component))
+            
+        return components if components else [task_description]
+
+    def _calculate_agent_score(self, agent: Agent, subtask: SubTask) -> float:
+        """Calculate how well an agent matches a subtask's requirements."""
+        score = 0.0
+        
+        # Check basic capability match
+        if hasattr(agent, 'capabilities'):
+            required_capabilities = set()  # You'll need to implement capability extraction
+            matching_caps = required_capabilities & set(agent.capabilities)
+            if matching_caps:
+                score += len(matching_caps) / len(required_capabilities)
+        
+        # Consider agent's specialization
+        if hasattr(agent, 'specializations'):
+            spec_score = sum(
+                0.3 for spec in agent.specializations
+                if any(term in subtask.description.lower() for term in spec.lower().split())
+            )
+            score += spec_score
+        
+        return score
+
+    def _estimate_durations(self, subtasks: List[SubTask]) -> Dict[str, float]:
+        """Estimate duration for subtasks based on description complexity."""
+        durations = {}
+        for subtask in subtasks:
+            # Simple estimation based on description length and complexity
+            base_duration = 0.5  # Base duration in hours
+            complexity_factor = 1.0
+            
+            # Adjust for complexity indicators
+            if any(term in subtask.description.lower() for term in ['complex', 'difficult', 'challenging']):
+                complexity_factor *= 1.5
+            if len(subtask.dependencies) > 0:
+                complexity_factor *= 1.2
+                
+            durations[subtask.task_id] = base_duration * complexity_factor
+            
+        return durations
 
     async def update_task_status(
         self,
@@ -552,13 +667,13 @@ When communicating with other agents, including the User, please follow these gu
             return "No active task"
 
         try:
-            plan = self.task_manager.active_tasks.get(self.active_task_id)
+            plan = self.active_tasks.get(self.active_task_id)
             if not plan:
                 return "Task plan not found"
 
             # Find and update subtask
             for subtask in plan.subtasks:
-                if subtask.id == subtask_id:
+                if subtask.task_id == subtask_id:
                     subtask.status = status
                     if result:
                         subtask.result = result
@@ -566,31 +681,52 @@ When communicating with other agents, including the User, please follow these gu
                         subtask.completed_at = datetime.utcnow()
                     break
 
-            # Update task status
-            self.task_status = self.task_manager.get_subtask_status(self.active_task_id)
+            # Calculate new status
+            total = len(plan.subtasks)
+            completed = sum(1 for s in plan.subtasks if s.status == "completed")
+            in_progress = sum(1 for s in plan.subtasks if s.status == "in_progress")
+            failed = sum(1 for s in plan.subtasks if s.status == "failed")
+            pending = total - completed - in_progress - failed
+            
+            self.task_status = {
+                "total_subtasks": total,
+                "completed": completed,
+                "in_progress": in_progress,
+                "pending": pending,
+                "failed": failed,
+                "estimated_completion": self._estimate_remaining_time(plan)
+            }
+            
             return f"Updated status of subtask {subtask_id} to {status}"
 
         except Exception as e:
             Logger.error(f"Error updating task status: {str(e)}")
             return f"Error: {str(e)}"
+            
+    def _estimate_remaining_time(self, plan: TaskDivisionPlan) -> float:
+        """Estimate remaining time based on uncompleted subtasks."""
+        incomplete = [s for s in plan.subtasks if s.status not in ["completed", "failed"]]
+        if not incomplete:
+            return 0.0
+        
+        return sum(plan.estimated_duration.get(s.task_id, 0.5) for s in incomplete)
 
     async def get_task_status(self) -> str:
         """Get current status of task execution."""
         if not self.active_task_id:
             return "No active task"
-
-        status = self.task_manager.get_subtask_status(self.active_task_id)
-        if not status:
+            
+        if not self.task_status:
             return "No status available"
 
         return (
             f"Task Progress:\n"
-            f"- Total subtasks: {status['total_subtasks']}\n"
-            f"- Completed: {status['completed']}\n"
-            f"- In Progress: {status['in_progress']}\n"
-            f"- Pending: {status['pending']}\n"
-            f"- Failed: {status['failed']}\n"
-            f"- Estimated completion in: {status['estimated_completion']:.1f} hours"
+            f"- Total subtasks: {self.task_status['total_subtasks']}\n"
+            f"- Completed: {self.task_status['completed']}\n"
+            f"- In Progress: {self.task_status['in_progress']}\n"
+            f"- Pending: {self.task_status['pending']}\n"
+            f"- Failed: {self.task_status['failed']}\n"
+            f"- Estimated completion in: {self.task_status['estimated_completion']:.1f} hours"
         )
 
     async def receive_agent_response(
@@ -612,11 +748,13 @@ When communicating with other agents, including the User, please follow these gu
             metadata=metadata
         )
         
-        await self.response_aggregator.add_response(task_id, response)
+        if task_id not in self.response_buffer:
+            self.response_buffer[task_id] = []
+        self.response_buffer[task_id].append(response)
         
         if task_id in self.pending_responses:
             self.pending_responses[task_id][agent_id] = True
-            
+
     async def aggregate_responses(
         self,
         task_id: str,
@@ -635,25 +773,198 @@ When communicating with other agents, including the User, please follow these gu
                 if missing_responses:
                     return f"Waiting for responses from: {', '.join(missing_responses)}"
             
-            # Aggregate responses
-            aggregated = await self.response_aggregator.aggregate_responses(
-                task_id,
-                AggregationStrategy(strategy),
-                weights
-            )
+            # Get responses from buffer
+            if task_id not in self.response_buffer:
+                return "No responses found for this task"
+                
+            responses = self.response_buffer[task_id]
+            if not responses:
+                return "No responses to aggregate"
+                
+            # Choose aggregation strategy
+            strategy_enum = AggregationStrategy(strategy)
+            if strategy_enum == AggregationStrategy.SEQUENTIAL:
+                merged = self._aggregate_sequential(responses)
+            elif strategy_enum == AggregationStrategy.PARALLEL:
+                merged = self._aggregate_parallel(responses)
+            elif strategy_enum == AggregationStrategy.WEIGHTED:
+                merged = self._aggregate_weighted(responses, weights or {})
+            elif strategy_enum == AggregationStrategy.VOTING:
+                merged = self._aggregate_voting(responses)
+            elif strategy_enum == AggregationStrategy.HYBRID:
+                merged = self._aggregate_hybrid(responses, weights)
+            else:
+                raise ValueError(f"Unsupported aggregation strategy: {strategy}")
             
-            # Get formatted response
-            formatted = self.response_aggregator.get_formatted_response(task_id)
+            # Cache result
+            self.aggregation_cache[task_id] = merged
             
             # Clean up
-            self.response_aggregator.cleanup_task(task_id)
+            self.response_buffer.pop(task_id, None)
             self.pending_responses.pop(task_id, None)
             
-            return formatted.content[0]['text']
+            # Return formatted result
+            return merged["content"] if isinstance(merged["content"], str) else str(merged["content"])
             
         except Exception as e:
             Logger.error(f"Error aggregating responses: {str(e)}")
             return f"Error: {str(e)}"
+
+    def _aggregate_sequential(self, responses: List[AgentResponse]) -> Dict[str, Any]:
+        """Combine responses in sequence."""
+        merged_content = []
+        total_confidence = 0.0
+        
+        for resp in sorted(responses, key=lambda x: x.timestamp):
+            if isinstance(resp.content, str):
+                merged_content.append(resp.content)
+            else:
+                merged_content.append(json.dumps(resp.content))
+            total_confidence += resp.confidence
+            
+        return {
+            "content": "\n".join(merged_content),
+            "confidence": total_confidence / len(responses),
+            "details": {"merge_type": "sequential"}
+        }
+        
+    def _aggregate_parallel(self, responses: List[AgentResponse]) -> Dict[str, Any]:
+        """Merge parallel responses by type."""
+        merged = {}
+        confidences = []
+        
+        for resp in responses:
+            if resp.response_type == ResponseType.STRUCTURED:
+                # Merge dictionaries
+                if isinstance(resp.content, dict):
+                    merged.update(resp.content)
+            elif resp.response_type == ResponseType.DATA:
+                # Combine data responses
+                key = f"data_{len(merged)}"
+                merged[key] = resp.content
+            else:
+                # Append text/code responses
+                key = f"response_{len(merged)}"
+                merged[key] = resp.content
+                
+            confidences.append(resp.confidence)
+            
+        return {
+            "content": merged,
+            "confidence": sum(confidences) / len(confidences),
+            "details": {"merge_type": "parallel"}
+        }
+        
+    def _aggregate_weighted(
+        self,
+        responses: List[AgentResponse],
+        weights: Dict[str, float]
+    ) -> Dict[str, Any]:
+        """Aggregate responses using weighted scoring."""
+        weighted_responses = []
+        total_weight = 0
+        weighted_confidence = 0
+        
+        for resp in responses:
+            weight = weights.get(resp.agent_id, 1.0)
+            total_weight += weight
+            weighted_confidence += resp.confidence * weight
+            
+            if isinstance(resp.content, str):
+                weighted_responses.append(
+                    {"content": resp.content, "weight": weight}
+                )
+            else:
+                weighted_responses.append(
+                    {"content": json.dumps(resp.content), "weight": weight}
+                )
+                
+        # Combine weighted responses
+        merged_content = "\n".join(
+            f"{r['content']}" for r in sorted(
+                weighted_responses,
+                key=lambda x: x["weight"],
+                reverse=True
+            )
+        )
+        
+        return {
+            "content": merged_content,
+            "confidence": weighted_confidence / total_weight,
+            "details": {
+                "merge_type": "weighted",
+                "weights_used": weights
+            }
+        }
+        
+    def _aggregate_voting(self, responses: List[AgentResponse]) -> Dict[str, Any]:
+        """Aggregate responses using voting/consensus."""
+        # Count occurrences of each unique response
+        vote_counts = {}
+        for resp in responses:
+            key = str(resp.content)
+            if key not in vote_counts:
+                vote_counts[key] = {
+                    "count": 0,
+                    "confidence_sum": 0,
+                    "content": resp.content
+                }
+            vote_counts[key]["count"] += 1
+            vote_counts[key]["confidence_sum"] += resp.confidence
+            
+        # Find response with most votes
+        winner = max(
+            vote_counts.values(),
+            key=lambda x: (x["count"], x["confidence_sum"])
+        )
+        
+        consensus_ratio = winner["count"] / len(responses)
+        confidence = winner["confidence_sum"] / winner["count"]
+        
+        return {
+            "content": winner["content"],
+            "confidence": confidence * consensus_ratio,
+            "details": {
+                "merge_type": "voting",
+                "vote_distribution": {
+                    k: v["count"] for k, v in vote_counts.items()
+                }
+            }
+        }
+        
+    def _aggregate_hybrid(
+        self,
+        responses: List[AgentResponse],
+        weights: Optional[Dict[str, float]] = None
+    ) -> Dict[str, Any]:
+        """Combine multiple aggregation strategies based on response types."""
+        # Group responses by type
+        grouped = {}
+        for resp in responses:
+            if resp.response_type not in grouped:
+                grouped[resp.response_type] = []
+            grouped[resp.response_type].append(resp)
+            
+        merged_results = {}
+        confidence_scores = []
+        
+        # Apply appropriate strategy for each type
+        for resp_type, resps in grouped.items():
+            if resp_type == ResponseType.STRUCTURED:
+                result = self._aggregate_parallel(resps)
+            elif resp_type == ResponseType.TEXT:
+                result = self._aggregate_weighted(resps, weights or {})
+            else:
+                result = self._aggregate_sequential(resps)
+                
+            merged_results[resp_type.value] = result["content"]
+            confidence_scores.append(result["confidence"])
+            
+        return {
+            "content": merged_results,
+            "confidence": sum(confidence_scores) / len(confidence_scores),
+            "details": {"merge_type": "hybrid"}
+        }
 
     async def process_request(
         self,

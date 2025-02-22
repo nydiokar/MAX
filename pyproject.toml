@@ -1,5 +1,5 @@
 [build-system]
-   requires = ["setuptools>=72.1"]
+   requires = ["setuptools>=42", "wheel"]
    build-backend = "setuptools.build_meta"
 [tool.pytest.ini_options]
      asyncio_mode = "auto"
@@ -13,3 +13,10 @@
      ]
      log_cli = true
      log_cli_level = "INFO"
+     python_files = ["test_*.py"]
+     addopts = "-v --tb=short"
+[tool.mypy]
+python_version = "3.9"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = true
