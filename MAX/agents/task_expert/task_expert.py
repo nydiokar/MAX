@@ -19,7 +19,7 @@ from MAX.agents.task_expert.options import TaskExpertOptions
 from MAX.agents.task_expert.task_tool_registry import TaskToolRegistry
 from MAX.llms.base import AsyncLLMBase
 from MAX.config.llms.ollama import OllamaConfig
-from MAX.config.llms.base import BaseLlmConfig
+from MAX.config.base_llm import BaseLlmConfig
 from MAX.llms.ollama import OllamaLLM
 
 

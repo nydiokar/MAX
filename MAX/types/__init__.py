@@ -41,7 +41,7 @@ from .collaboration_management_types import (
     AggregationStrategy,
     ResponseType
 )
-from MAX.config.llms.base import ResourceConfig
+from MAX.config.base_llm import ResourceConfig
 
 __all__ = [
     # Base types

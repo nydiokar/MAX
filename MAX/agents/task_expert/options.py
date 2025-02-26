@@ -4,7 +4,7 @@ from MAX.tools.tool_config import ToolConfig
 from MAX.config.llms.ollama import OllamaConfig
 
 # from MAX.config.llms.anthropic import AnthropicConfig  # Uncomment when needed
-from MAX.config.llms.base import BaseLlmConfig
+from MAX.config.base_llm import BaseLlmConfig
 from MAX.config.llms.llm_config import LLM_CONFIGS
 from MAX.retrievers import Retriever
 

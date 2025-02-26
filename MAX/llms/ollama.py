@@ -1,177 +1,123 @@
-from typing import Dict, List
+"""Ollama LLM implementation with integrated configuration."""
+from dataclasses import dataclass
+from typing import Dict, List, Optional, Union, AsyncIterator
+import aiohttp
+import json
 from enum import Enum
+from datetime import datetime
 
-import ollama
+from MAX.types.base_types import (
+    ConversationMessage,
+    AgentResponse,
+    ParticipantRole,
+    MessageType
+)
 
-from MAX.llms.base import (
-    AsyncLLMBase,
-)  # Adapt this import to your actual codebase
-from MAX.config.llms.base import BaseLlmConfig
-from MAX.utils import Logger
-
-
-class OllamaModelType(Enum):
-    """
-    Enumerated default model variants for Ollama.
-    Customize these as needed for your environment.
-    """
-
+class OllamaModelType(str, Enum):
+    """Available Ollama model types with their corresponding model names"""
     GENERAL = "llama3.1:8b-instruct-q8_0"
     CODE = "llama3.1:8b-instruct-q8_0"
     FAST = "llama3.1:8b-instruct-q8_0"
     INSTRUCT = "llama3.1:8b-instruct-q8_0"
 
+@dataclass
+class OllamaLLM:
+    """Combined Ollama configuration and implementation"""
+    model_type: Union[OllamaModelType, str] = OllamaModelType.GENERAL
+    temperature: float = 0.7
+    max_tokens: int = 2048
+    streaming: bool = False
+    context_window: int = 4096
+    stop_sequences: Optional[List[str]] = None
+    timeout: float = 30.0
+    api_base: str = "http://localhost:11434/api"
+    max_parallel_calls: int = 3
+    local_only: bool = True
 
-class OllamaLLM(AsyncLLMBase):
-    """
-    An Ollama-based LLM implementation with specialized model selection,
-    fallback handling, and advanced generation options.
+    @property
+    def model(self) -> str:
+        """Get the actual model name from the model type"""
+        if isinstance(self.model_type, str):
+            return self.model_type
+        return self.model_type.value
 
-    Usage:
-    1. Create a BaseLlmConfig (or a subclass) specifying 'model', 'temperature', etc.
-    2. Instantiate OllamaLLM with that config.
-    3. Call `.generate()` with a list of messages (dicts) to get a response.
-    """
+    async def _make_request(self, endpoint: str, data: Dict) -> Dict:
+        """Make regular API request to Ollama"""
+        url = f"{self.api_base}/{endpoint}"
+        timeout = aiohttp.ClientTimeout(total=self.timeout)
+        
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with session.post(url, json=data) as resp:
+                if resp.status != 200:
+                    raise Exception(f"Ollama API error: {resp.status} - {await resp.text()}")
+                return await resp.json()
 
-    DEFAULT_MODELS = {
-        "general": OllamaModelType.GENERAL.value,
-        "code": OllamaModelType.CODE.value,
-        "fast": OllamaModelType.FAST.value,
-        "instruct": OllamaModelType.INSTRUCT.value,
-    }
+    async def _make_streaming_request(self, endpoint: str, data: Dict) -> AsyncIterator[Dict]:
+        """Make streaming API request to Ollama"""
+        url = f"{self.api_base}/{endpoint}"
+        timeout = aiohttp.ClientTimeout(total=self.timeout)
+        
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with session.post(url, json=data) as resp:
+                if resp.status != 200:
+                    raise Exception(f"Ollama API error: {resp.status} - {await resp.text()}")
+                async for line in resp.content:
+                    if line:
+                        yield json.loads(line)
 
-    def __init__(self, config: BaseLlmConfig):
-        """
-        Initialize the OllamaLLM with a given configuration.
+    def _create_request_data(self, system_prompt: str, messages: List[Dict[str, str]], stream: bool = False) -> Dict:
+        """Create request data dictionary"""
+        return {
+            "model": self.model,
+            "messages": messages,
+            "system": system_prompt,
+            "temperature": self.temperature,
+            "max_tokens": self.max_tokens,
+            "stop": self.stop_sequences,
+            "stream": stream,
+        }
 
-        Args:
-            config (BaseLlmConfig): Configuration object specifying model, temperature, etc.
-        """
-        super().__init__(config)
-        self.client = self._create_client()
-        self.logger = Logger
-
-    def _create_client(self):
-        """
-        Create an Ollama client instance.
-        This is separated out for easier mocking in tests.
-
-        Returns:
-            A new instance of `ollama.Client`.
-        """
-        from ollama import Client
-
-        if self.config.api_base_url:
-            return Client(host=self.config.api_base_url)
-        # If no api_base_url is specified, it will use the default.
-        return Client()
-
-    async def _ensure_model_exists(self) -> None:
-        """
-        Check if the model is available locally; if not and auto_pull_models is True, pull it.
-        Failures are logged but non-fatal, as the model might already exist locally.
-        """
-        try:
-            if self.config.auto_pull_models and self.config.model:
-                # As of Ollama, `pull(model_name)` downloads the model if absent
-                await self.client.pull(self.config.model)
-        except Exception as e:
-            # Log the warning, do not raise
-            self.logger.warn(
-                f"Failed to pull model '{self.config.model}': {str(e)}"
-            )
-
-    async def _generate(self, messages: List[Dict[str, str]]) -> str:
-        """
-        Perform text generation using Ollama's chat API.
-        Applies advanced inference options (temperature, top_p, etc.).
-
-        Args:
-            messages (List[Dict[str, str]]): Conversation messages,
-                                             typically with keys: {'role': ..., 'content': ...}.
-
-        Returns:
-            str: The generated text from the model.
-
-        Raises:
-            Exception: If the generation fails and no fallback_model is set.
-        """
-        await self._ensure_model_exists()
-
-        try:
-            response = await ollama.chat(
-                model=self.config.model,
-                messages=messages,
-                options={
-                    "temperature": self.config.temperature,
-                    "top_p": self.config.top_p,
-                    "num_predict": self.config.max_tokens,
-                    # Optionally read "stop" sequences from the last message
-                    "stop": messages[-1].get("stop", []) if messages else [],
-                    "repeat_penalty": 1.1,  # Helps reduce repetitiveness
-                    "num_ctx": 4096,  # Context window size
-                },
-            )
-            # The Ollama library's response typically looks like: {"message": {"content": "..."}}
-            return response["message"]["content"]
-
-        except Exception as e:
-            self.logger.error(f"Ollama generation error: {e}")
-            # If a fallback model is specified, try that
-            if self.config.fallback_model:
-                return await self._generate_with_fallback(messages)
-            # Otherwise raise the exception
-            raise
-
-    async def _generate_with_fallback(
-        self, messages: List[Dict[str, str]]
-    ) -> str:
-        """
-        If primary model fails and fallback_model is specified, generate with a simpler or smaller model.
-
-        Args:
-            messages (List[Dict[str, str]]): The conversation history.
-
-        Returns:
-            str: The generated text from the fallback model.
-        """
-        self.logger.info(
-            f"Using fallback model '{self.config.fallback_model}' due to primary model error."
+    def _create_response(self, content: str, metadata: Dict = None) -> AgentResponse:
+        """Create standardized agent response"""
+        return AgentResponse(
+            content=content,
+            confidence=1.0,  # Ollama doesn't provide confidence scores
+            metadata={
+                "model": self.model,
+                "finish_reason": "stop",
+                **(metadata or {})
+            },
+            timestamp=datetime.now(),
+            message_type=MessageType.TEXT
         )
-        try:
-            response = await ollama.chat(
-                model=self.config.fallback_model,
-                messages=messages,
-                options={
-                    "temperature": self.config.temperature,
-                    "num_predict": self.config.max_tokens,
-                },
-            )
-            return response["message"]["content"]
-        except Exception as e:
-            # If fallback also fails, re-raise
-            self.logger.error(
-                f"Fallback model '{self.config.fallback_model}' also failed: {e}"
-            )
-            raise
+
+    async def generate(
+        self,
+        system_prompt: str,
+        messages: List[Dict[str, str]],
+        stream: bool = False,
+    ) -> Union[AgentResponse, AsyncIterator[ConversationMessage]]:
+        """Generate response from Ollama"""
+        data = self._create_request_data(system_prompt, messages, stream)
+        
+        if not stream:
+            response = await self._make_request("chat", data)
+            if "message" in response and "content" in response["message"]:
+                return self._create_response(response["message"]["content"])
+            return self._create_response(str(response))
+        else:
+            async def stream_response():
+                async for chunk in self._make_streaming_request("chat", data):
+                    if "message" in chunk and "content" in chunk["message"]:
+                        yield ConversationMessage(
+                            role=ParticipantRole.ASSISTANT,
+                            content=[{"text": chunk["message"]["content"]}],
+                            metadata={"model": self.model},
+                            message_type=MessageType.TEXT
+                        )
+            return stream_response()
 
     @classmethod
-    def get_model_for_task(cls, task_type: str) -> str:
-        """
-        Retrieve a default model name for a given type of task.
-
-        Args:
-            task_type (str): The category of the task, e.g. 'code', 'fast', 'instruction'.
-
-        Returns:
-            str: The corresponding model name, or the 'general' model if no match.
-        """
-        task_models = {
-            "code": cls.DEFAULT_MODELS["code"],
-            "fast": cls.DEFAULT_MODELS["fast"],
-            "instruction": cls.DEFAULT_MODELS["instruct"],
-            "general": cls.DEFAULT_MODELS["general"],
-        }
-        return task_models.get(
-            task_type.lower(), cls.DEFAULT_MODELS["general"]
-        )
+    def create(cls, **kwargs) -> 'OllamaLLM':
+        """Factory method to create OllamaLLM instances"""
+        return cls(**kwargs)

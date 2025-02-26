@@ -1,5 +1,5 @@
 from typing import Optional
-from MAX.config.llms.base import BaseLlmConfig
+from MAX.config.base_llm import BaseLlmConfig
 from MAX.llms.base import AsyncLLMBase
 
 

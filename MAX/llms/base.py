@@ -1,6 +1,6 @@
 from abc import ABC, abstractmethod
 from typing import Dict, List, Optional
-from MAX.config.llms.base import BaseLlmConfig
+from MAX.config.base_llm import BaseLlmConfig
 
 
 class AsyncLLMBase(ABC):

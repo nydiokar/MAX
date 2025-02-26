@@ -7,7 +7,7 @@ from datetime import datetime
 from MAX.types import ConversationMessage, ParticipantRole
 from MAX.storage import ChatStorage, InMemoryChatStorage
 from MAX.utils import Logger
-from MAX.config.llms.base import BaseLlmConfig
+from MAX.config.base_llm import BaseLlmConfig
 
 # TODO: Import your specific LLM clients when implemented
 # from MAX.llms.anthropic import AnthropicLLM

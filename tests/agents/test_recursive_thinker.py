@@ -19,7 +19,7 @@ from MAX.llms.anthropic import AnthropicLLM, LLMProviderError
 from MAX.llms.utils.exceptions import LLMConfigError
 from tests.mocks.storage import MockChatStorage
 from typing import AsyncGenerator, List, Optional, Dict, Any, Union
-from MAX.config.llms.base import BaseLlmConfig
+from MAX.config.base_llm import BaseLlmConfig
 from MAX.llms.base import AsyncLLMBase
 
 class MockLLM(AsyncLLMBase):
