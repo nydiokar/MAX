@@ -2,13 +2,17 @@ import pytest
 import aiohttp
 import asyncio
 from datetime import datetime
-from MAX.types import TimestampedMessage
-from MAX.agents import RecursiveThinkerAgent, RecursiveThinkerOptions
-from MAX.types import ConversationMessage, ParticipantRole
-from MAX.storage import InMemoryChatStorage
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, AsyncGenerator
 
-async def is_ollama_available():
+from MAX.agents import RecursiveThinkerAgent, RecursiveThinkerOptions
+from MAX.types import ConversationMessage, ParticipantRole, TimestampedMessage
+from MAX.storage import MongoDBChatStorage
+from MAX.storage.utils.storage_factory import StorageFactory
+from MAX.storage.data_hub_cache import DataHubCache, DataHubCacheConfig
+from MAX.retrievers.kb_retriever import KnowledgeBasesRetriever, KnowledgeBasesRetrieverOptions
+from MAX.config.database_config import DatabaseConfig
+
+async def is_ollama_available() -> bool:
     """Check if Ollama server is running and has models loaded"""
     try:
         timeout = aiohttp.ClientTimeout(total=5)  # Set overall timeout to 5 seconds
@@ -39,139 +43,67 @@ async def is_ollama_available():
         print(f"\nError checking Ollama: {str(e)}")
         return False
 
-class TestChatStorage(InMemoryChatStorage):
-    """Simple storage implementation for testing"""
-    
-    def __init__(self):
-        super().__init__()
-        self.state: Dict = {}
-        self.conversations: Dict[str, List[TimestampedMessage]] = {}
-        
-    async def initialize(self) -> bool:
-        return True
-        
-    async def cleanup(self) -> bool:
-        self.conversations.clear()
-        return True
-        
-    async def check_health(self) -> bool:
-        return True
-        
-    async def get_system_state(self) -> Dict:
-        return self.state
-        
-    async def save_system_state(self, state: Dict) -> bool:
-        self.state = state
-        return True
-        
-    async def save_task_state(self, task_id: str, state: Dict) -> bool:
-        self.state[task_id] = state
-        return True
-
-    async def save_chat_message(
-        self,
-        user_id: str,
-        session_id: str,
-        agent_id: str,
-        new_message: ConversationMessage,
-        max_history_size: Optional[int] = None,
-    ) -> bool:
-        key = f"{user_id}#{session_id}#{agent_id}"
-        if key not in self.conversations:
-            self.conversations[key] = []
-            
-        # Create TimestampedMessage properly
-        if isinstance(new_message.content, list) and new_message.content:
-            text = next((item.get("text", "") for item in new_message.content if isinstance(item, dict) and "text" in item), "")
-        else:
-            text = str(new_message.content) if new_message.content else ""
-                
-        timestamp = (new_message.metadata.get('timestamp') 
-                    if new_message.metadata 
-                    else datetime.now().timestamp())
-            
-        # Create ConversationMessage first
-        message = ConversationMessage(
-            role=ParticipantRole.USER,
-            content=[{"text": text}],
-            message_type="text"
-        )
-        
-        # Create TimestampedMessage with proper structure
-        timestamped_message = TimestampedMessage(
-            message=message,
-            timestamp=datetime.fromtimestamp(timestamp) if isinstance(timestamp, float) else timestamp
-        )
-        
-        self.conversations[key].append(timestamped_message)
-        
-        if max_history_size and len(self.conversations[key]) > max_history_size:
-            self.conversations[key] = self.conversations[key][-max_history_size:]
-        
-        return True
-        
-    async def fetch_chat(
-        self,
-        user_id: str,
-        session_id: str,
-        agent_id: str,
-        max_history_size: Optional[int] = None,
-    ) -> List[ConversationMessage]:
-        key = f"{user_id}#{session_id}#{agent_id}"
-        messages = self.conversations.get(key, [])
-        
-        if max_history_size:
-            messages = messages[-max_history_size:]
-            
-        # Convert TimestampedMessage to ConversationMessage
-        converted_messages = []
-        for msg in messages:
-            # Extract text from the message structure
-            if isinstance(msg, TimestampedMessage):
-                # Get the message content from the wrapped ConversationMessage
-                text = msg.message.content[0]["text"] if msg.message.content else ""
-                converted_messages.append(
-                    ConversationMessage(
-                        role=msg.message.role,
-                        content=[{"text": text}],
-                        message_type="text",
-                        metadata={"timestamp": msg.timestamp}
-                    )
-                )
-        return converted_messages
-        
-    async def search_similar_messages(
-        self,
-        query: str,
-        user_id: Optional[str] = None,
-        session_id: Optional[str] = None,
-        limit: int = 5
-    ) -> List[ConversationMessage]:
-        return []
+@pytest.fixture
+async def storage() -> AsyncGenerator[MongoDBChatStorage, None]:
+    """Create MongoDB storage instance for testing"""
+    storage_factory = StorageFactory(
+        mongo_uri="mongodb://localhost:27017",
+        db_name="max_agents_test"  # Use a separate test database
+    )
+    storage = storage_factory.get_chat_storage()
+    await storage.initialize()  # Properly initialize the storage
+    yield storage
+    await storage.cleanup()  # Cleanup after tests
 
 @pytest.fixture
-def storage():
-    return TestChatStorage()
+async def cache(storage: MongoDBChatStorage) -> AsyncGenerator[DataHubCache, None]:
+    """Create DataHubCache instance for testing"""
+    config = DataHubCacheConfig(
+        message_cache_ttl=300,  # 5 minutes
+        state_cache_ttl=60,     # 1 minute
+        max_cached_sessions=1000,
+        max_messages_per_session=100,
+        enable_vector_cache=True
+    )
+    db_config = DatabaseConfig()
+    cache = DataHubCache(config, db_config)
+    yield cache
 
 @pytest.fixture
-def agent_options(storage):
+async def retriever(storage: MongoDBChatStorage) -> AsyncGenerator[KnowledgeBasesRetriever, None]:
+    """Create KnowledgeBasesRetriever instance for testing"""
+    options = KnowledgeBasesRetrieverOptions(
+        storage_client=storage,
+        collection_name="test_collection",
+        max_results=5,
+        similarity_threshold=0.7
+    )
+    retriever = KnowledgeBasesRetriever(options)
+    yield retriever
+
+@pytest.fixture
+def agent_options(storage: MongoDBChatStorage, cache: DataHubCache, retriever: KnowledgeBasesRetriever) -> RecursiveThinkerOptions:
     return RecursiveThinkerOptions(
         name="test_agent",
         description="Test agent",
         model_type="llama3.1:8b-instruct-q8_0",  # Use model we know exists
         storage=storage,
-        streaming=False
+        streaming=False,
+        memory_system=cache,  # Use DataHubCache for memory
+        retriever=retriever   # Use KnowledgeBasesRetriever for context retrieval
     )
 
 @pytest.fixture
-async def agent(agent_options):
+async def agent(agent_options: RecursiveThinkerOptions) -> AsyncGenerator[RecursiveThinkerAgent, None]:
     agent = RecursiveThinkerAgent(agent_options)
     await agent.initialize()
-    return agent  # Simple return since no cleanup needed
-
+    yield agent
+    # Don't cleanup storage so we can verify the data
+    # if agent.options.storage:
+    #     await agent.options.storage.cleanup()
 
 @pytest.mark.asyncio
-async def test_basic_chat(agent):
+async def test_basic_chat(agent: RecursiveThinkerAgent) -> None:
     """Test that agent can understand and respond to messages"""
     print("\nTesting basic chat functionality...")
     
@@ -198,10 +130,10 @@ async def test_basic_chat(agent):
         pytest.fail(f"Test failed with exception: {str(e)}")
 
 @pytest.mark.asyncio
-async def test_memory(agent, storage):
+async def test_memory(agent: RecursiveThinkerAgent, cache: DataHubCache) -> None:
     """Test memory system functionality"""
     # Test storage functionality without LLM
-    test_messages = []
+    test_messages: List[ConversationMessage] = []
     for i in range(3):
         msg = ConversationMessage(
             role=ParticipantRole.USER,
@@ -213,19 +145,22 @@ async def test_memory(agent, storage):
                 "session_id": "test_session"
             }
         )
-        await storage.save_chat_message(
+        # Use cache to store message
+        await cache.save_chat_message(
+            message=msg,
             user_id="test_user",
             session_id="test_session",
             agent_id=agent.id,
-            new_message=msg
+            storage=agent.options.storage
         )
         test_messages.append(msg)
     
-    # Verify storage retrieval
-    stored_messages = await storage.fetch_chat(
+    # Verify storage retrieval through cache
+    stored_messages = await cache.get_chat_messages(
         user_id="test_user",
         session_id="test_session",
-        agent_id=agent.id
+        agent_id=agent.id,
+        storage=agent.options.storage
     )
     assert len(stored_messages) >= 3
     
@@ -233,6 +168,45 @@ async def test_memory(agent, storage):
     for msg in stored_messages:
         assert isinstance(msg, ConversationMessage)
         assert "timestamp" in msg.metadata
+
+@pytest.mark.asyncio
+async def test_memory_persistence(agent: RecursiveThinkerAgent, cache: DataHubCache) -> None:
+    """Test that memory persists across agent instances"""
+    print("\nTesting memory persistence...")
+    
+    # Store a message with first agent instance
+    response1 = await agent.process_request(
+        input_text="Remember this: The code is 1234",
+        user_id="test_user",
+        session_id="persistence_test",
+        chat_history=[]
+    )
+    
+    # Verify the response
+    assert isinstance(response1, ConversationMessage)
+    assert response1.role == ParticipantRole.ASSISTANT
+    assert "1234" in response1.content[0]["text"]
+    
+    # Debug: Print storage info
+    print(f"\nStorage database: {agent.options.db_name}")
+    print(f"Storage collection: {agent.options.collection_name}")
+    
+    # Verify message was stored in cache
+    stored_messages = await cache.get_chat_messages(
+        user_id="test_user",
+        session_id="persistence_test",
+        agent_id=agent.id,
+        storage=agent.options.storage
+    )
+    
+    # Debug: Print stored messages
+    print(f"\nStored messages in cache: {len(stored_messages)}")
+    for msg in stored_messages:
+        print(f"- {msg.role}: {msg.content[0]['text']}")
+    
+    # Verify storage contents
+    assert len(stored_messages) >= 2  # Should have user message and response
+    assert any("1234" in msg.content[0]["text"] for msg in stored_messages), "Original message not found in storage"
 
 if __name__ == "__main__":
     pytest.main([__file__])

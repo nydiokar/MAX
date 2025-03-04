@@ -1,5 +1,5 @@
 import pytest
-from unittest.mock import Mock, patch
+from unittest.mock import Mock, patch, AsyncMock, MagicMock
 from MAX.orchestrator import MultiAgentOrchestrator
 from MAX.config.orchestrator_config import OrchestratorConfig
 from MAX.types import ConversationMessage, ParticipantRole
@@ -7,6 +7,7 @@ from MAX.types.workflow_types import WorkflowStage
 from MAX.classifiers import ClassifierResult
 from MAX.agents import Agent, AgentResponse
 from MAX.storage import InMemoryChatStorage
+from MAX.agents.default_agent import DefaultAgent
 
 @pytest.fixture
 def mock_classifier():
@@ -20,22 +21,128 @@ def mock_storage():
 
 @pytest.fixture
 def mock_agent():
-    mock = Mock(spec=Agent)
+    mock = AsyncMock(spec=Agent)
     mock.name = "MOCK_AGENT"
     mock.id = "mock_agent"
     mock.description = "Mock agent for testing"
-    mock.is_streaming_enabled = Mock(return_value=False)
+    mock.is_streaming_enabled.return_value = False
+    mock.process_request.return_value = ConversationMessage(
+        role=ParticipantRole.ASSISTANT,
+        content=[{"text": "Mock response"}]
+    )
     return mock
 
 @pytest.fixture
-def orchestrator(mock_classifier, mock_storage, mock_agent):
+async def orchestrator(mock_storage, mock_agent):
+    """Create a test orchestrator with basic configuration."""
+    config = OrchestratorConfig(
+        LOG_EXECUTION_TIMES=True,
+        USE_DEFAULT_AGENT_IF_NONE_IDENTIFIED=True,
+        MEMORY_ENABLED=True
+    )
     orchestrator = MultiAgentOrchestrator(
-        options=OrchestratorConfig(),
-        storage=mock_storage,
-        classifier=mock_classifier
+        options=config,
+        storage=mock_storage
     )
     orchestrator.add_agent(mock_agent)
-    return orchestrator
+    yield orchestrator
+    await orchestrator.shutdown()
+
+@pytest.mark.asyncio
+async def test_agent_registration(orchestrator, mock_agent):
+    """Test basic agent registration functionality."""
+    assert mock_agent.id in orchestrator.get_all_agents()
+    
+    # Test adding another agent
+    new_agent = DefaultAgent()
+    success = orchestrator.add_agent(new_agent)
+    assert success
+    assert new_agent.id in orchestrator.get_all_agents()
+
+@pytest.mark.asyncio
+async def test_message_routing(orchestrator, mock_agent):
+    """Test basic message routing functionality."""
+    response = await orchestrator.route_request(
+        user_input="test message",
+        user_id="test_user",
+        session_id="test_session"
+    )
+    
+    assert response is not None
+    assert isinstance(response, AgentResponse)
+    assert mock_agent.process_request.called
+    assert "Mock response" in response.output.content[0]["text"]
+
+@pytest.mark.asyncio
+async def test_memory_storage(orchestrator):
+    """Test basic memory storage functionality."""
+    if not orchestrator.memory_manager:
+        pytest.skip("Memory manager not enabled")
+    
+    test_message = ConversationMessage(
+        role=ParticipantRole.USER,
+        content=[{"text": "Test memory storage"}]
+    )
+    
+    # Test storage
+    await orchestrator.memory_manager.store_message(
+        message=test_message,
+        agent_id="test_agent",
+        session_id="test_session"
+    )
+    
+    # Test retrieval
+    context = await orchestrator.memory_manager.get_relevant_context(
+        query="Test memory",
+        agent_id="test_agent",
+        session_id="test_session"
+    )
+    
+    assert context is not None
+    assert "Test memory storage" in context
+
+@pytest.mark.asyncio
+async def test_error_handling(orchestrator, mock_agent):
+    """Test error handling in message routing."""
+    mock_agent.process_request.side_effect = Exception("Test error")
+    
+    response = await orchestrator.route_request(
+        user_input="trigger error",
+        user_id="test_user",
+        session_id="test_session"
+    )
+    
+    assert response is not None
+    assert "error" in response.metadata
+    assert response.metadata["error"] == "Test error"
+
+@pytest.mark.asyncio
+async def test_performance_metrics(orchestrator):
+    """Test collection of performance metrics."""
+    # Send a test request
+    await orchestrator.route_request(
+        user_input="Test performance metrics",
+        user_id="test_user",
+        session_id="test_session"
+    )
+    
+    # Verify execution times are collected
+    assert len(orchestrator.execution_times) > 0
+    assert "Classifying user intent" in orchestrator.execution_times
+    assert "Agent execution" in orchestrator.execution_times
+
+def test_agent_availability(orchestrator):
+    """Test agent availability checking."""
+    test_agent = DefaultAgent()
+    orchestrator.add_agent(test_agent)
+    
+    # Test availability check
+    assert orchestrator._is_agent_available(test_agent)
+    
+    # Test with busy agent
+    test_agent.current_tasks = ["task1", "task2"]
+    test_agent.max_concurrent_tasks = 2
+    assert not orchestrator._is_agent_available(test_agent)
 
 @pytest.mark.asyncio
 async def test_agent_selection_with_classifier(orchestrator, mock_classifier, mock_agent):

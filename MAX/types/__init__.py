@@ -1,3 +1,8 @@
+from typing import Dict, Union, List
+
+# Add this type definition
+TemplateVariables = Dict[str, Union[str, List[str]]]
+
 """
 Types module for MAX system.
 Import all types from their respective modules and expose them at package level.
@@ -44,6 +49,9 @@ from .collaboration_management_types import (
 from MAX.config.base_llm import ResourceConfig
 
 __all__ = [
+    # Add TemplateVariables to __all__
+    "TemplateVariables",
+    
     # Base types
     "MessageType",
     "ParticipantRole",

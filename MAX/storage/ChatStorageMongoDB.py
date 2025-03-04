@@ -63,12 +63,16 @@ class MongoDBChatStorage(ChatStorage):
         try:
             key = self._generate_key(user_id, session_id, agent_id)
 
-            # Convert message to dict for storage
-            message_dict = {
-                "role": str(new_message.role),
-                "content": new_message.content,
-                "timestamp": new_message.timestamp,
-            }
+            # Get timestamp from metadata or use current time
+            timestamp = new_message.metadata.get('timestamp') if new_message.metadata else datetime.now().timestamp()
+
+            # Create a new ConversationMessage with the timestamp in metadata
+            message_with_timestamp = ConversationMessage(
+                role=new_message.role,
+                content=new_message.content,
+                metadata=new_message.metadata or {}
+            )
+            message_with_timestamp.metadata['timestamp'] = timestamp
 
             # Fetch existing conversation
             existing_conversation = await self.fetch_chat_with_timestamps(
@@ -83,7 +87,7 @@ class MongoDBChatStorage(ChatStorage):
                 return False
 
             # Add the new message and trim the conversation
-            existing_conversation.append(TimestampedMessage(**message_dict))
+            existing_conversation.append(TimestampedMessage(message=message_with_timestamp))
             trimmed_conversation = self.trim_conversation(
                 existing_conversation, max_history_size
             )
@@ -94,7 +98,17 @@ class MongoDBChatStorage(ChatStorage):
                 {
                     "_id": key,
                     "messages": [
-                        msg.model_dump() for msg in trimmed_conversation
+                        {
+                            "message": {
+                                "role": str(msg.message.role),
+                                "content": msg.message.content,
+                                "metadata": msg.message.metadata,
+                                "message_type": str(msg.message.message_type) if hasattr(msg.message, 'message_type') else None
+                            },
+                            "timestamp": msg.timestamp.isoformat() if isinstance(msg.timestamp, datetime) else msg.timestamp,
+                            "metadata": msg.metadata
+                        }
+                        for msg in trimmed_conversation
                     ],
                 },
                 upsert=True,
@@ -121,7 +135,11 @@ class MongoDBChatStorage(ChatStorage):
                 return []
 
             messages = [
-                TimestampedMessage(**msg)
+                TimestampedMessage(
+                    message=ConversationMessage(**msg["message"]),
+                    timestamp=datetime.fromisoformat(msg["timestamp"]) if isinstance(msg["timestamp"], str) else msg["timestamp"],
+                    metadata=msg.get("metadata")
+                )
                 for msg in document.get("messages", [])
             ]
 
@@ -148,7 +166,11 @@ class MongoDBChatStorage(ChatStorage):
             if not document:
                 return []
             return [
-                TimestampedMessage(**msg)
+                TimestampedMessage(
+                    message=ConversationMessage(**msg["message"]),
+                    timestamp=datetime.fromisoformat(msg["timestamp"]) if isinstance(msg["timestamp"], str) else msg["timestamp"],
+                    metadata=msg.get("metadata")
+                )
                 for msg in document.get("messages", [])
             ]
         except Exception as e:

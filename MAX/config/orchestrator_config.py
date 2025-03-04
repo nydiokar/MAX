@@ -23,4 +23,9 @@ class OrchestratorConfig:
     # Memory settings
     memory_decay_rate: float = 0.1
     min_confidence_threshold: float = 0.7
-    context_window_size: int = 1000 
+    context_window_size: int = 1000
+    
+    # Memory configuration
+    MEMORY_ENABLED: bool = True
+    MEMORY_COLLECTION_NAME: str = "agent_memory"
+    MEMORY_STORAGE_PATH: str = "./data/chroma" 

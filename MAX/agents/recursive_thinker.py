@@ -11,152 +11,53 @@ from MAX.types import (
     DataCategory
 )
 from MAX.llms.base import AsyncLLMBase
-from MAX.llms.ollama import OllamaLLM, OllamaModelType
+from MAX.llms.ollama import AsyncOllamaLLM, OllamaModelType
 from MAX.utils.logger import Logger
 from MAX.storage import ChatStorage
-from MAX.managers import MemorySystem
+from MAX.storage.utils.storage_factory import StorageFactory
 
 logger = Logger.get_logger()
 
 @dataclass
 class RecursiveThinkerOptions(AgentOptions):
-    """Options for basic conversation agent"""
+    """Options for recursive thinking agent"""
     streaming: bool = True
     storage: Optional[ChatStorage] = None
-    memory_system: Optional[MemorySystem] = None
     model_type: Union[str, OllamaModelType] = OllamaModelType.GENERAL
+    mongo_uri: str = "mongodb://localhost:27017"
+    db_name: str = "max_agents"
+    collection_name: str = "conversations"
+    max_history_size: int = 100
+    knowledge_threshold: int = 50  # Minimum length for knowledge-worthy responses
+    llm: Optional[AsyncLLMBase] = None  # Add LLM option
 
     def __post_init__(self):
         super().__post_init__() if hasattr(super(), '__post_init__') else None
         if not self.name:
-            self.name = "ChatAgent"
+            self.name = "RecursiveThinker"
         if not self.description:
-            self.description = "A basic conversational agent powered by Ollama"
+            self.description = "An agent that thinks recursively about problems"
+        
+        if not self.storage:
+            storage_factory = StorageFactory(self.mongo_uri, self.db_name)
+            self.storage = storage_factory.get_chat_storage()
+            
+        if not self.llm:
+            self.llm = AsyncOllamaLLM(
+                model_type=self.model_type,
+                temperature=0.7,
+                max_tokens=2048
+            )
 
 class RecursiveThinkerAgent(Agent):
-    """Basic conversational agent implementation."""
+    """Recursive thinking agent implementation."""
     
     def __init__(self, options: RecursiveThinkerOptions):
         super().__init__(options)
         self.options = options
         self.conversation_memories = {}
+        self._llm = options.llm
         
-    def _create_llm_provider(self) -> AsyncLLMBase:
-        """Create an instance of the LLM provider"""
-        try:
-            # Handle string model names directly
-            if isinstance(self.options.model_type, str):
-                model_type = self.options.model_type
-            else:
-                # For enum types, get the string value directly
-                model_type = self.options.model_type.value if hasattr(self.options.model_type, 'value') else str(self.options.model_type)
-            
-            logger.debug(f"Creating LLM with model type: {model_type}")
-            return OllamaLLM(
-                model_type=model_type,
-                streaming=self.options.streaming
-            )
-        except Exception as e:
-            logger.error(f"Error creating LLM provider: {str(e)}")
-            raise
-        
-    async def initialize(self) -> bool:
-        """Initialize the agent and create LLM instance"""
-        self._llm = self._create_llm_provider()
-        return True
-
-    async def _store_memory(
-        self,
-        session_id: str,
-        message: ConversationMessage,
-        agent_id: str = None,
-        data: Optional[Dict[str, Any]] = None,
-        max_history_size: Optional[int] = None
-    ) -> None:
-        """Store message in all available memory systems"""
-        # Store in conversation memory with size limit
-        if session_id not in self.conversation_memories:
-            self.conversation_memories[session_id] = []
-        
-        if max_history_size and len(self.conversation_memories[session_id]) >= max_history_size:
-            self.conversation_memories[session_id].pop(0)  # Remove oldest
-        self.conversation_memories[session_id].append(message)
-
-        # Store in persistent storage if available
-        if self.options.storage:
-            try:
-                await self.options.storage.save_chat_message(
-                    user_id=message.metadata.get("user_id", "unknown"),
-                    session_id=session_id,
-                    agent_id=agent_id or self.id,
-                    new_message=message,
-                    max_history_size=max_history_size
-                )
-            except Exception as e:
-                logger.error(f"Failed to store message in storage: {e}")
-
-        # Store in memory system if available
-        if self.options.memory_system and data:
-            try:
-                await self.options.memory_system.store(
-                    data=data,
-                    category=DataCategory.CONVERSATION,
-                    metadata=message.metadata or {}
-                )
-            except Exception as e:
-                logger.error(f"Failed to store in memory system: {e}")
-
-    async def _get_conversation_context(
-        self,
-        session_id: str, 
-        user_id: str = None,
-        limit: int = 5
-    ) -> List[ConversationMessage]:
-        """Get conversation history from the most appropriate source"""
-        messages: List[ConversationMessage] = []
-        
-        if self.options.storage:
-            try:
-                messages = await self.options.storage.fetch_chat(
-                    user_id=user_id or "unknown",
-                    session_id=session_id,
-                    agent_id=self.id,
-                    max_history_size=limit
-                )
-            except Exception as e:
-                logger.error(f"Failed to fetch from storage: {e}")
-
-        # Fallback to in-memory if storage failed or returned nothing
-        if not messages and session_id in self.conversation_memories:
-            messages = self.conversation_memories[session_id][-limit:]
-        
-        return messages
-
-    async def _format_messages(
-        self,
-        messages: List[ConversationMessage]
-    ) -> List[Dict[str, str]]:
-        """Format messages for Ollama API"""
-        formatted = []
-        for msg in messages:
-            role = "user" if msg.role == ParticipantRole.USER else "assistant"
-            content = msg.content[0]["text"] if msg.content else ""
-            formatted.append({
-                "role": role,
-                "content": content
-            })
-        return formatted
-
-    async def _extract_confidence(self, response_text: str) -> float:
-        """Extract confidence score from response"""
-        try:
-            if "Confidence: " in response_text:
-                confidence_str = response_text.split("Confidence: ")[1].split()[0]
-                return float(confidence_str)
-        except:
-            pass
-        return 0.5  # Default confidence
-
     async def process_request(
         self,
         input_text: str,
@@ -164,115 +65,190 @@ class RecursiveThinkerAgent(Agent):
         session_id: str,
         chat_history: Optional[List[ConversationMessage]] = None,
         additional_params: Optional[Dict[str, Any]] = None,
-    ) -> Union[ConversationMessage, AsyncIterable[Any]]:
-        """Process a chat request"""
+    ) -> Union[AgentResponse, AsyncIterable[Any]]:
+        """Process a request with recursive thinking approach."""
         try:
-            # Store user's input
-            user_message = ConversationMessage(
-                role=ParticipantRole.USER,
-                content=[{"text": input_text}],
-                metadata={
-                    "timestamp": datetime.now().isoformat(),
-                    "user_id": user_id,
-                    "session_id": session_id
-                },
-                message_type=MessageType.TEXT
-            )
-            await self._store_memory(session_id, user_message, max_history_size=5)
-
-            # Get conversation history
-            history = await self._get_conversation_context(
+            # 1. Get conversation context and relevant memories
+            context = await self._get_relevant_context(
+                input_text=input_text,
                 session_id=session_id,
-                user_id=user_id,
-                limit=5
-            )
-            if chat_history:
-                history.extend(chat_history)
-
-            # Format messages for LLM
-            messages = await self._format_messages(history)
-            messages.append({"role": "user", "content": input_text})
-            
-            system_prompt = self._create_system_prompt(
-                "\n".join(f"{msg['role']}: {msg['content']}" for msg in messages[:-1]),
-                input_text
+                chat_history=chat_history
             )
 
-            # Get LLM response
-            try:
-                response = await self._llm.generate(
-                    system_prompt=system_prompt,
-                    messages=messages,
-                    stream=self.options.streaming
-                )
-                
-                if self.options.streaming:
-                    response_text = ""
-                    async for chunk in response:
-                        if isinstance(chunk, ConversationMessage):
-                            response_text += chunk.content[0]["text"]
-                            if self.callbacks:
-                                self.callbacks.on_llm_new_token(chunk.content[0]["text"])
-                else:
-                    # Handle AgentResponse type
-                    response_text = response.content if isinstance(response, AgentResponse) else str(response)
+            # 2. Process the request with context
+            response = await self._llm.generate(
+                system_prompt=self._create_system_prompt(context, input_text),
+                messages=chat_history or [],
+                stream=self.options.streaming
+            )
 
-                # Create response message
-                response_message = ConversationMessage(
-                    role=ParticipantRole.ASSISTANT,
-                    content=[{"text": response_text}],  # Now properly formatted
-                    metadata={
-                        "timestamp": datetime.now().isoformat(),
-                        "user_id": user_id,
-                        "session_id": session_id
-                    },
-                    message_type=MessageType.TEXT
-                )
-
-                # Store in memory
-                await self._store_memory(
-                    session_id=session_id,
-                    message=response_message,
-                    data={"message": response_text},
-                    max_history_size=5
-                )
-                
-                return response_message
-
-            except Exception as e:
-                raise Exception(f"Error invoking Ollama: {str(e)}")
-
-        except Exception as e:
-            error_message = ConversationMessage(
-                role=ParticipantRole.ASSISTANT,
-                content=[{"text": f"Error processing request: {str(e)}"}],
+            # Convert to AgentResponse
+            agent_response = AgentResponse(
+                message=response,
+                message_type=MessageType.TEXT,
+                data_category=DataCategory.CONVERSATION,
                 metadata={
-                    "timestamp": datetime.now().isoformat(),
                     "user_id": user_id,
                     "session_id": session_id,
-                    "error": True
-                },
-                message_type=MessageType.TEXT
+                    "agent_id": self.id,
+                    "timestamp": datetime.now().isoformat()
+                }
             )
-            await self._store_memory(session_id, error_message)
-            return error_message
+
+            # Store with proper response type
+            if self._is_knowledge_worthy(response):
+                await self._store_interaction(
+                    message=agent_response,
+                    user_id=user_id,
+                    session_id=session_id,
+                    is_important=True
+                )
+            else:
+                await self._store_interaction(
+                    message=agent_response,
+                    user_id=user_id,
+                    session_id=session_id,
+                    is_important=False
+                )
+
+            return agent_response
+
+        except Exception as e:
+            logger.error(f"Error in process_request: {str(e)}")
+            error_response = self._create_error_response(str(e), user_id, session_id)
+            await self._store_interaction(error_response, user_id, session_id, is_important=False)
+            return error_response
+
+    def _is_knowledge_worthy(self, message: ConversationMessage) -> bool:
+        """Determine if a message should be stored in long-term memory."""
+        if not isinstance(message, ConversationMessage):
+            return False
+            
+        return (
+            message.role == ParticipantRole.ASSISTANT and
+            not message.metadata.get("error", False) and
+            len(message.content[0]["text"]) > self.options.knowledge_threshold and
+            not message.metadata.get("is_fallback", False)
+        )
+
+    async def _get_relevant_context(
+        self,
+        input_text: str,
+        session_id: str,
+        chat_history: Optional[List[ConversationMessage]] = None,
+    ) -> str:
+        """Get relevant context combining memory and chat history."""
+        try:
+            context_parts = []
+            
+            # 1. Get recent conversation history
+            if chat_history:
+                recent_context = [
+                    msg.content[0]["text"] 
+                    for msg in chat_history[-3:]
+                ]
+                context_parts.extend(recent_context)
+
+            # 2. Search semantic memory
+            memory_results = await self._llm.memory.search(
+                query=input_text,
+                limit=5
+            )
+            if memory_results:
+                memory_context = [result.text for result in memory_results]
+                context_parts.extend(memory_context)
+
+            # 3. Get local conversation memory as fallback
+            if not context_parts and session_id in self.conversation_memories:
+                local_context = [
+                    msg.content[0]["text"] 
+                    for msg in self.conversation_memories[session_id][-3:]
+                ]
+                context_parts.extend(local_context)
+            
+            return "\n".join(context_parts)
+
+        except Exception as e:
+            logger.error(f"Error getting context: {str(e)}")
+            return ""
+
+    async def _store_interaction(
+        self,
+        message: ConversationMessage,
+        user_id: str,
+        session_id: str,
+        is_important: bool = False
+    ) -> None:
+        """Store interaction with importance-based storage strategy."""
+        try:
+            # Always store in conversation history
+            if session_id not in self.conversation_memories:
+                self.conversation_memories[session_id] = []
+            
+            if len(self.conversation_memories[session_id]) >= self.options.max_history_size:
+                self.conversation_memories[session_id].pop(0)
+            
+            self.conversation_memories[session_id].append(message)
+
+            # Store important interactions in semantic memory
+            if is_important:
+                await self._llm.memory.store(
+                    text=message.content[0]["text"],
+                    metadata={
+                        "user_id": user_id,
+                        "session_id": session_id,
+                        "agent_id": self.id,
+                        "timestamp": datetime.now().isoformat(),
+                        "importance": "high"
+                    }
+                )
+
+            # Store in persistent storage if available
+            if self.options.storage:
+                await self.options.storage.save_chat_message(
+                    user_id=user_id,
+                    session_id=session_id,
+                    agent_id=self.id,
+                    new_message=message,
+                    max_history_size=self.options.max_history_size
+                )
+
+        except Exception as e:
+            logger.error(f"Error storing interaction: {str(e)}")
+
+    def _create_error_response(self, error_msg: str, user_id: str, session_id: str) -> ConversationMessage:
+        """Create a standardized error response."""
+        return ConversationMessage(
+            role=ParticipantRole.ASSISTANT,
+            content=[{"text": f"I encountered an error: {error_msg}. Please try rephrasing your request."}],
+            metadata={
+                "error": True,
+                "user_id": user_id,
+                "session_id": session_id,
+                "timestamp": datetime.now().isoformat()
+            }
+        )
 
     def _create_system_prompt(self, context: str, input_text: str) -> str:
-        """Create base system prompt"""
-        return f"""Previous conversation:
+        """Create system prompt with recursive thinking approach."""
+        return f"""Previous context and knowledge:
 {context}
 
-You are a helpful assistant that:
-1. Provides clear and direct answers
-2. Maintains conversation context
-3. Formats responses in a clear structure
+You are a recursive thinking assistant that:
+1. Breaks down complex problems into smaller parts
+2. Considers multiple approaches before responding
+3. Maintains conversation context
+4. Builds on previous knowledge
 
-Instructions:
-1. Always be polite and helpful
-2. Keep responses concise but informative
-3. Use context when relevant
+Thinking process:
+1. Analyze the input carefully
+2. Consider relevant context
+3. Break down complex issues
+4. Synthesize a clear response
 
 Current user input: {input_text}
+
+Provide your response in a clear, structured format.
 """
 
     def is_streaming_enabled(self) -> bool:
@@ -281,5 +257,9 @@ Current user input: {input_text}
 
     async def aclose(self) -> None:
         """Clean up resources"""
-        # Currently no cleanup needed for Ollama
-        pass
+        if self.options.storage:
+            try:
+                await self.options.storage.cleanup()
+                logger.info("Storage system cleaned up successfully")
+            except Exception as e:
+                logger.error(f"Failed to cleanup storage: {str(e)}")

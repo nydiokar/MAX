@@ -83,7 +83,12 @@ class ChatStorage(ABC):
             List[ConversationMessage]: Messages without timestamps.
         """
         return [
-            ConversationMessage(role=msg.role, content=msg.content)
+            ConversationMessage(
+                role=msg.role,
+                content=msg.content,
+                metadata=msg.message.metadata,
+                message_type=msg.message.message_type if hasattr(msg.message, 'message_type') else None
+            )
             for msg in messages
         ]
 
